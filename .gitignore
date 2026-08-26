@@ -1,5 +1,13 @@
 # Rust build artifacts
 rust/target/
 
-# Runtime temporary images
+# Never commit prebuilt Windows binaries or AutoHotkey runtimes.
+*.exe
+.ahk_build/
+
+# Runtime temporary images (legacy next-to-exe location)
 temp/
+
+.DS_Store
+*.pdb
+*.ilk

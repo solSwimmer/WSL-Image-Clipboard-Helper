@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo audit
+        working-directory: rust
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+      - name: Test
+        working-directory: rust
+        run: cargo test --locked --target x86_64-pc-windows-msvc
+      - name: Clippy
+        working-directory: rust
+        run: cargo clippy --locked --target x86_64-pc-windows-msvc

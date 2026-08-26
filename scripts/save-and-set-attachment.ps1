@@ -2,11 +2,22 @@ param(
     [string]$FilePath
 )
 
+# Deprecated. Use the Rust build. Writes only a .png under a \temp\ folder.
+
 if (-not $FilePath) {
     exit 1
 }
 
-$dir = Split-Path -Parent $FilePath
+try {
+    $full = [System.IO.Path]::GetFullPath($FilePath)
+} catch {
+    exit 1
+}
+
+if ($full -match '\.\.') { exit 1 }
+if ($full -notmatch '(?i)\\temp\\[^\\/]+\.png$') { exit 1 }
+
+$dir = Split-Path -Parent $full
 if (-not $dir) {
     exit 1
 }
@@ -35,22 +46,19 @@ try {
         exit 1
     }
 
-    # 先在内存中编码 PNG，再一次写盘，避免“先写盘再读盘”的额外 IO。
     $pngBuffer = New-Object System.IO.MemoryStream
     $image.Save($pngBuffer, [System.Drawing.Imaging.ImageFormat]::Png)
     $bytes = $pngBuffer.ToArray()
-    [System.IO.File]::WriteAllBytes($FilePath, $bytes)
+    [System.IO.File]::WriteAllBytes($full, $bytes)
 
     $pngStream = New-Object System.IO.MemoryStream(,$bytes)
     $data = New-Object System.Windows.Forms.DataObject
 
-    # 图片通道：客户端若支持，会直接渲染为附件占位。
     $data.SetData([System.Windows.Forms.DataFormats]::Bitmap, $true, $image)
     $data.SetData("PNG", $true, $pngStream)
 
-    # 文件通道：兼容通过文件粘贴识别附件的客户端。
     $files = New-Object System.Collections.Specialized.StringCollection
-    [void]$files.Add($FilePath)
+    [void]$files.Add($full)
     $data.SetFileDropList($files)
 
     [System.Windows.Forms.Clipboard]::SetDataObject($data, $true)

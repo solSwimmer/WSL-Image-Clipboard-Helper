@@ -63,12 +63,13 @@ impl ClipboardManager {
         unsafe { IsClipboardFormatAvailable(CF_HDROP.0 as u32) != 0 }
     }
 
-    pub fn read_file_list_for_paste(&self) -> Option<Vec<String>> {
+    pub fn read_file_list_for_paste(&self, allow_non_image_files: bool) -> Option<Vec<String>> {
         let paths = self.get_file_paths()?;
         let wsl_paths: Vec<String> = paths
             .iter()
+            .filter(|path| allow_non_image_files || crate::paths::is_image_path(path))
             .map(|path| convert_path_to_wsl(path))
-            .filter(|path| !path.is_empty())
+            .filter_map(|path| crate::paths::sanitize_pasted_path(&path))
             .collect();
 
         if wsl_paths.is_empty() {
@@ -108,7 +109,7 @@ impl ClipboardManager {
         // 生成文件名和路径
         let now = chrono::Local::now();
         let timestamp = now.format("%Y%m%d_%H%M%S_%3f").to_string();
-        let filename = format!("clip_{}.png", timestamp);
+        let filename = format!("clip_{}_{}.png", timestamp, std::process::id());
 
         let win_path = self.temp_dir.join(&filename);
         let wsl_path = if !self.wsl_temp_dir.is_empty() {
@@ -507,4 +508,29 @@ fn calculate_dib_copy_size(
     let row_size = calculate_row_size(width, bi_bit_count)?;
     let image_size = row_size.checked_mul(height)?;
     pixel_offset.checked_add(image_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::convert_path_to_wsl;
+
+    #[test]
+    fn converts_drive_paths() {
+        assert_eq!(
+            convert_path_to_wsl(r"C:\Users\me\clip.png"),
+            "/mnt/c/Users/me/clip.png"
+        );
+        assert_eq!(
+            convert_path_to_wsl(r#"D:\temp\file.png"#),
+            "/mnt/d/temp/file.png"
+        );
+        assert_eq!(convert_path_to_wsl(r"C:/foo/bar"), "/mnt/c/foo/bar");
+    }
+
+    #[test]
+    fn rejects_unc_and_empty() {
+        assert_eq!(convert_path_to_wsl(r"\\server\share\file.png"), "");
+        assert_eq!(convert_path_to_wsl(r"\\?\C:\foo.png"), "");
+        assert_eq!(convert_path_to_wsl(""), "");
+    }
 }

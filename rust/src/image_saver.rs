@@ -21,9 +21,13 @@ pub async fn ensure_saved(path: &Path, data: &[u8]) -> anyhow::Result<()> {
             .context("创建临时目录失败")?;
     }
 
-    tokio::fs::write(path, data)
+    let tmp_path = path.with_extension("png.partial");
+    tokio::fs::write(&tmp_path, data)
         .await
         .context("写入图片文件失败")?;
+    tokio::fs::rename(&tmp_path, path)
+        .await
+        .context("提交图片文件失败")?;
 
     info!("图片已保存: {}", path.display());
     Ok(())

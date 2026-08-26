@@ -1,5 +1,7 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
+; DEPRECATED: this AutoHotkey helper is unsupported. Use the Rust build in ../rust.
+; See scripts/DEPRECATED.md.
 
 global gScriptDir := A_ScriptDir
 global gTempDir := GetFullPath(gScriptDir "\..\temp")
@@ -779,7 +781,8 @@ IsAttachmentPasteMode() {
 ConvertPathToWsl(winPath) {
     local p := Trim(winPath, '"')
 
-    ; 处理常见的驱动器路径 "C:\path\to\file"
+    ; 只转换驱动器路径。不再回退到 `cmd.exe /C wsl wslpath`，
+    ; 避免 cmd 对 %VAR% 的展开以及引号拼接带来的命令注入。
     if RegExMatch(p, "^[A-Za-z]:\\") {
         local drive := SubStr(p, 1, 1)
         local rest := SubStr(p, 3)
@@ -788,24 +791,7 @@ ConvertPathToWsl(winPath) {
         return "/mnt/" . StrLower(drive) . "/" . rest
     }
 
-    ; 如果不是驱动器路径，尝试调用 wsl wslpath
-    try {
-        local out := Trim(RunGetStdOut('wsl wslpath -a -u "' p '"'))
-        if (out != "") {
-            return out
-        }
-    } catch {
-        ; 忽略错误
-    }
-
     return ""
-}
-
-
-RunGetStdOut(cmd) {
-    shell := ComObject("WScript.Shell")
-    exec := shell.Exec(A_ComSpec " /C " cmd)
-    return exec.StdOut.ReadAll()
 }
 
 

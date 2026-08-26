@@ -2,11 +2,22 @@ param(
     [string]$FilePath
 )
 
+# Deprecated. Use the Rust build. Only reads an existing .png under a \temp\ folder.
+
 if (-not $FilePath) {
     exit 1
 }
 
-if (-not (Test-Path -LiteralPath $FilePath)) {
+try {
+    $full = [System.IO.Path]::GetFullPath($FilePath)
+} catch {
+    exit 1
+}
+
+if ($full -match '\.\.') { exit 1 }
+if ($full -notmatch '(?i)\\temp\\[^\\/]+\.png$') { exit 1 }
+
+if (-not (Test-Path -LiteralPath $full)) {
     exit 1
 }
 
@@ -17,8 +28,8 @@ $img = $null
 $bytes = $null
 $pngStream = $null
 try {
-    $img = [System.Drawing.Image]::FromFile($FilePath)
-    $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+    $img = [System.Drawing.Image]::FromFile($full)
+    $bytes = [System.IO.File]::ReadAllBytes($full)
     $pngStream = New-Object System.IO.MemoryStream(,$bytes)
 } catch {
     exit 1
@@ -27,15 +38,11 @@ try {
 try {
     $data = New-Object System.Windows.Forms.DataObject
 
-    # 图片格式：部分客户端通过位图通道识别为附件
     $data.SetData([System.Windows.Forms.DataFormats]::Bitmap, $true, $img)
-
-    # PNG 原始流：部分 Electron/TUI 客户端会优先读取 PNG
     $data.SetData("PNG", $true, $pngStream)
 
-    # 文件拖放格式：部分客户端通过文件通道识别为附件
     $files = New-Object System.Collections.Specialized.StringCollection
-    [void]$files.Add($FilePath)
+    [void]$files.Add($full)
     $data.SetFileDropList($files)
 
     [System.Windows.Forms.Clipboard]::SetDataObject($data, $true)

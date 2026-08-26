@@ -33,6 +33,7 @@ const CMD_IME_OFF: u32 = 6001;
 const CMD_IME_IMM: u32 = 6002;
 const CMD_IME_LAYOUT: u32 = 6003;
 const CMD_IME_LAYOUT_FORCE: u32 = 6004;
+const CMD_ALLOW_NON_IMAGE: u32 = 7001;
 
 /// 托盘发往主循环的命令
 #[derive(Debug, Clone)]
@@ -41,6 +42,7 @@ pub enum TrayCommand {
     SwitchMode(RuntimeMode),
     SwitchPathStyle(PathStyle),
     SwitchImeProtection(ImeProtection),
+    SwitchAllowNonImageFiles(bool),
     OpenFolder,
     Exit,
 }
@@ -383,6 +385,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let ime_label: Vec<u16> = "输入法保护\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_POPUP, h_ime_menu.0 as usize, PCWSTR::from_raw(ime_label.as_ptr()));
 
+    // ---- 非图片文件 ----
+    let mut file_flags = MF_STRING;
+    if state.config.allow_non_image_files {
+        file_flags |= MF_CHECKED;
+    }
+    let file_label: Vec<u16> = "允许转换非图片文件\0".encode_utf16().collect();
+    let _ = AppendMenuW(h_menu, file_flags, CMD_ALLOW_NON_IMAGE as usize, PCWSTR::from_raw(file_label.as_ptr()));
+
     // ---- 分隔线 ----
     let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
@@ -427,6 +437,7 @@ unsafe fn handle_menu_command(cmd_id: u32) {
         CMD_IME_IMM => switch_ime_protection(state, ImeProtection::Imm),
         CMD_IME_LAYOUT => switch_ime_protection(state, ImeProtection::Layout),
         CMD_IME_LAYOUT_FORCE => switch_ime_protection(state, ImeProtection::LayoutForce),
+        CMD_ALLOW_NON_IMAGE => toggle_allow_non_image_files(state),
         CMD_OPEN_FOLDER => {
             let _ = state.cmd_tx.send(TrayCommand::OpenFolder);
         }
@@ -514,9 +525,21 @@ unsafe fn switch_mode(state: &mut TrayState, mode: RuntimeMode) {
     info!("已切换模式: {}", mode_str);
 }
 
+unsafe fn toggle_allow_non_image_files(state: &mut TrayState) {
+    state.config.allow_non_image_files = !state.config.allow_non_image_files;
+    let _ = state.config.save();
+    let _ = state.cmd_tx.send(TrayCommand::SwitchAllowNonImageFiles(
+        state.config.allow_non_image_files,
+    ));
+    info!(
+        "非图片文件路径转换: {}",
+        state.config.allow_non_image_files
+    );
+}
+
 /// 打开临时文件夹
 pub fn open_temp_folder() -> Result<()> {
-    let temp_dir = cleanup::temp_dir_from_current_exe()?;
+    let temp_dir = crate::paths::temp_dir()?;
 
     if temp_dir.exists() {
         std::process::Command::new("explorer.exe")

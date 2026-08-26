@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
@@ -11,6 +11,7 @@ mod config;
 mod hotkey;
 mod image_saver;
 mod paste;
+mod paths;
 mod tray;
 
 use clipboard::ClipboardManager;
@@ -22,6 +23,7 @@ struct AppState {
     runtime_mode: RuntimeMode,
     path_style: PathStyle,
     ime_protection: ImeProtection,
+    allow_non_image_files: bool,
 }
 
 #[tokio::main]
@@ -44,13 +46,9 @@ async fn main() -> Result<()> {
         app_config.ime_protection.as_str()
     );
 
-    // 确定临时目录
-    let temp_dir = cleanup::temp_dir_from_current_exe()?;
-
-    if !temp_dir.exists() {
-        std::fs::create_dir_all(&temp_dir).context("创建临时目录失败")?;
-    }
-
+    // 临时图片和配置放在 %LOCALAPPDATA%\WSLImageClipboardHelper，
+    // 不再写到可执行文件旁边（避免掉进 git 仓库或共享目录）。
+    let temp_dir = paths::ensure_app_dirs()?;
     info!("临时目录: {}", temp_dir.display());
 
     // 注意（issue #10）：这里**不再**预加载英文键盘布局。
@@ -67,6 +65,7 @@ async fn main() -> Result<()> {
         runtime_mode: app_config.runtime_mode.clone(),
         path_style: app_config.path_style,
         ime_protection: app_config.ime_protection,
+        allow_non_image_files: app_config.allow_non_image_files,
     }));
 
     // 启动托盘（含热键管理器）
@@ -93,7 +92,7 @@ async fn main() -> Result<()> {
     // 定时清理任务
     let temp_dir_for_cleanup = temp_dir.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(7200));
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(900));
         loop {
             interval.tick().await;
             if let Err(e) = cleanup::cleanup_old_files(&temp_dir_for_cleanup) {
@@ -109,11 +108,11 @@ async fn main() -> Result<()> {
         tokio::select! {
             // 热键触发
             Some(_hotkey_id) = hotkey_rx.recv() => {
-                let (mode, path_style, ime_protection) = {
+                let (mode, path_style, ime_protection, allow_non_image_files) = {
                     let s = state.lock().await;
-                    (s.runtime_mode.clone(), s.path_style, s.ime_protection)
+                    (s.runtime_mode.clone(), s.path_style, s.ime_protection, s.allow_non_image_files)
                 };
-                match handle_paste(&clipboard_manager, &mode, path_style, ime_protection).await {
+                match handle_paste(&clipboard_manager, &mode, path_style, ime_protection, allow_non_image_files).await {
                     Ok(_) => {}
                     Err(e) => {
                         error!("粘贴处理失败: {}", e);
@@ -140,6 +139,11 @@ async fn main() -> Result<()> {
                         info!("主循环: 输入法保护已切换为 {}", policy.display_name());
                         let mut s = state.lock().await;
                         s.ime_protection = policy;
+                    }
+                    TrayCommand::SwitchAllowNonImageFiles(allow) => {
+                        info!("主循环: 非图片文件路径转换={}", allow);
+                        let mut s = state.lock().await;
+                        s.allow_non_image_files = allow;
                     }
                     TrayCommand::OpenFolder => {
                         if let Err(e) = tray::open_temp_folder() {
@@ -178,6 +182,7 @@ async fn handle_paste(
     mode: &RuntimeMode,
     path_style: PathStyle,
     ime_protection: ImeProtection,
+    allow_non_image_files: bool,
 ) -> Result<()> {
     // 0. 立即注入菜单屏蔽键：赶在物理 Alt 抬起之前，
     //    避免目标窗口把"Alt 按下→抬起"当成单击 Alt 激活菜单栏
@@ -186,8 +191,14 @@ async fn handle_paste(
     // 1. 检查剪贴板是否有图片
     if !clipboard_manager.has_image() {
         if clipboard_manager.has_file_list() {
-            if let Some(wsl_paths) = clipboard_manager.read_file_list_for_paste() {
+            if let Some(wsl_paths) =
+                clipboard_manager.read_file_list_for_paste(allow_non_image_files)
+            {
                 let paste_text = path_style.format_paths(&wsl_paths);
+                if paste_text.is_empty() {
+                    info!("文件路径已全部过滤，跳过粘贴");
+                    return Ok(());
+                }
 
                 let _ime_guard = match mode {
                     RuntimeMode::Safe => Some(paste::ImeGuard::new(ime_protection)),
@@ -198,6 +209,11 @@ async fn handle_paste(
                 paste::paste_text(&paste_text)?;
                 return Ok(());
             }
+
+            // 剪贴板是文件列表但没有允许粘贴的项（例如复制了 .env）。
+            // 不要回退 Ctrl+V，否则会把原始文件拖放打进当前窗口。
+            info!("剪贴板文件列表已拒绝（非图片或路径不安全），跳过粘贴");
+            return Ok(());
         }
 
         info!("剪贴板无图片，执行普通粘贴");

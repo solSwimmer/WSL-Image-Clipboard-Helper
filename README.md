@@ -11,11 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/latest">Release</a>
+  <a href="#english-guide">English</a>
   ·
   <a href="#中文说明">中文</a>
   ·
-  <a href="#english-guide">English</a>
+  <a href="SECURITY.md">Security</a>
+</p>
+
+<p align="center">
+  Security-hardened fork of <a href="https://github.com/cpulxb/WSL-Image-Clipboard-Helper">cpulxb/WSL-Image-Clipboard-Helper</a>. Build from source; this tree does not ship <code>.exe</code> files.
 </p>
 
 ---
@@ -32,9 +36,11 @@
 - 现状：部分 AI CLI 工具通过“保存图片到文件 -> 传递文件路径”的方式变相支持图片输入
 
 #### ✅ 解决方案
-本工具用于弥补这个缺口：通过全局快捷键（默认 `Alt+V`），自动读取 Windows 剪贴板图片，保存到本地 `temp/` 目录，并把对应 WSL 路径（`/mnt/c/...`）粘贴到当前输入窗口，让 AI 工具可以直接消费图片文件。
+本工具用于弥补这个缺口：通过全局快捷键（默认 `Alt+V`），自动读取 Windows 剪贴板图片，保存到 `%LOCALAPPDATA%\WSLImageClipboardHelper\temp`，并把对应 WSL 路径（`/mnt/c/...`）粘贴到当前输入窗口，让 AI 工具可以直接消费图片文件。
 
-当前主版本是 Rust 实现（`v4.0`）。推荐直接下载 GitHub Release `v4.0` 或 latest release 中的预编译版本。
+当前主版本是 Rust 实现（`v4.2`）。**请自行从源码编译**，不要运行 git 仓库或来路不明压缩包里的 `.exe`。
+
+> 这是一个输入代理：它会注册全局热键、读取剪贴板、向当前窗口注入 `Ctrl+V`。许多 AI CLI 在路径对应的文件已存在时会**跳过读文件授权**，直接把图片当附件。不要对密码管理器截图、`.env`、密钥文件按这个热键。详见 [SECURITY.md](SECURITY.md)。
 
 ### ✨ 核心特性
 
@@ -45,7 +51,7 @@
 - 🖱️ 托盘管理：支持切换热键、切换运行模式、打开临时图片目录、退出并清理临时图片
 - 🛡️ 图片读取边界保护：对 DIB 头与内存大小做安全校验，避免异常数据导致崩溃
 - 🪟 Windows 集成：内嵌多尺寸图标，并带 DPI-aware manifest，高 DPI 环境显示更稳定
-- 📁 Explorer 路径转换：在资源管理器复制文件后按 `Alt+V`，会粘贴对应 `/mnt/...` 路径
+- 📁 Explorer 路径转换：默认**只转换图片文件**；非图片（`.env` / 密钥等）会被忽略，可在托盘打开 `允许转换非图片文件`
 - 🎯 路径格式可切换：纯路径 / `@` 前缀（适配 Kimi Code CLI、Gemini CLI、Qwen Code）/ 引号包裹
 
 ![clip_20260217_184919_809](./img/clip_20260217_184919_809.png)
@@ -68,69 +74,63 @@
 
 - Windows 10/11，已启用 WSL2
 - PowerShell 5.1 及以上
-- Rust 工具链（仅在需要自行编译 Rust 版本时）
-- AutoHotkey v2（仅在维护旧版 AHK 流程或自编 AHK 可执行文件时）
+- Rust 工具链（自行编译所必需）
+- AutoHotkey v2（已弃用，不要再编译 AHK 版）
 
 ### 🗂️ 目录结构
 
 ```text
 WSL-Image-Clipboard-Helper/
 ├── README.md
-├── docs/                    # 文档记录
-│   ├── architecture_by_codex.md
-│   ├── terminal-ctrl-v-interception.md
-│   └── rust-refactor-v3-v4.md
-├── rust/                    # rust重构版本
+├── LICENSE
+├── SECURITY.md
+├── docs/
+├── rust/                    # 唯一支持的实现
 │   ├── Cargo.toml
 │   ├── Cargo.lock
-│   ├── wsl_clipboard.toml
-│   └── src/                 # rust重构版本核心代码
-├── scripts/                 # AHK 相关脚本与历史可执行文件
+│   └── src/
+└── scripts/                 # 已弃用的 AHK / PowerShell（见 scripts/DEPRECATED.md）
 ```
 
 ### 🚀 使用方式（Rust 版本）
 
-1. 最简单方式（推荐）：从 GitHub Release 下载已编译版本：
-   - `v4.1.2`：[https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/tag/v4.1.2](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/tag/v4.1.2)
-   - latest release：[https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/latest](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/latest)
+1. 克隆本仓库并编译（推荐，也是唯一受支持的安装方式）：
 
-2. 将下载的 `wsl_clipboard.exe` 放到一个固定目录。
-
-   Releases 压缩包中文件目录
-
-   ```
-   WSL-Image-Clipboard-Helper/
-   ├── wsl_clipboard.exe        # 推荐直接使用的预编译可执行文件（rust版本)
-   ├── temp/                    # 运行时临时图片目录
-   ├── wsl_clipboard.toml       # 运行时自动生成，存储相关配置，不要删除
-   ```
-
-3. 双击启动 `wsl_clipboard.exe`。
-
-4. 在任意可编辑输入框按下快捷键（默认 `Alt+V`）：
-   - 有图片：保存到 `temp/`，并粘贴 `/mnt/...` 路径
-   - 无图片：自动回退普通粘贴（`Ctrl+V`）
-   - 在 Explorer 中先复制文件，再按 `Alt+V`：粘贴转换后的 WSL 路径（例如 `/mnt/c/...`）
-
-5. 通过托盘菜单切换热键与运行模式。
-
-6. 退出时从托盘菜单选择 `退出并清理临时图片`，会删除 `temp/` 下的临时 PNG 文件。
-
-如需自行编译，再使用下面的源码方式：
-
-1. 克隆仓库并进入目录：
    ```bash
-   git clone https://github.com/cpulxb/WSL-Image-Clipboard-Helper.git
-   cd WSL-Image-Clipboard-Helper
+   git clone git@github.com:solSwimmer/WSL-Image-Clipboard-Helper.git
+   cd WSL-Image-Clipboard-Helper/rust
+   cargo build --release --target x86_64-pc-windows-msvc
    ```
-2. 按下文“Rust 版本编译（推荐）”完成编译。
-3. 启动编译产物 `wsl_clipboard.exe`。
+
+   产物：`rust/target/x86_64-pc-windows-msvc/release/wsl_clipboard.exe`
+
+2. 把编译出的 `wsl_clipboard.exe` 放到一个**固定、非项目**目录后双击启动。不要放进 git 仓库。
+
+   运行时文件在 `%LOCALAPPDATA%\WSLImageClipboardHelper\`（配置 `wsl_clipboard.toml` 与 `temp\` 图片）。该目录会收紧 ACL，只给当前用户和 SYSTEM。
+
+3. 在任意可编辑输入框按下快捷键（默认 `Alt+V`）：
+   - 有图片：保存到 `%LOCALAPPDATA%\WSLImageClipboardHelper\temp`，并粘贴 `/mnt/...` 路径
+   - 无图片：自动回退普通粘贴（`Ctrl+V`）
+   - 在 Explorer 中先复制**图片文件**，再按 `Alt+V`：粘贴转换后的 WSL 路径。非图片默认忽略。
+
+4. 通过托盘菜单切换热键、运行模式、是否允许非图片文件。
+
+5. 退出时从托盘菜单选择 `退出并清理临时图片`。
+
+### 🧹 卸载
+
+1. 托盘图标右键 → `退出并清理临时图片`（结束进程并删除临时 PNG）。
+2. 删除启动项（若你加过）：`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\wsl_clipboard.bat`
+3. 删除可执行文件所在目录。
+4. 删除 `%LOCALAPPDATA%\WSLImageClipboardHelper`
+5. 若旧版曾往系统里塞了 `ENG` 键盘布局：`设置 → 时间和语言 → 语言和区域` 里手动删一次。
 
 ### ⚠️ 常见注意事项
 
 - 默认热键是 `Alt+V`，可在托盘菜单中切换为 `Ctrl+Alt+V` 或 `Alt+Enter`
-- 运行配置保存在 `wsl_clipboard.toml`（与可执行文件同目录）
-- 托盘菜单中的 `退出并清理临时图片` 会删除 `temp/` 下的临时 PNG 文件
+- 运行配置保存在 `%LOCALAPPDATA%\WSLImageClipboardHelper\wsl_clipboard.toml`
+- 托盘菜单中的 `退出并清理临时图片` 会删除该目录 `temp/` 下的临时 PNG 文件（超过 30 分钟的 PNG 也会被周期清理）
+- **不要以管理员身份运行本工具。** UIPI 拦住注入按键是正常保护；提权后它可以向任何提权窗口打字。
 - 若遇到输入法导致的粘贴错乱，切回 `兼容模式（输入法保护）`
 - 不希望本工具碰输入法，可在托盘 `输入法保护` 中选择 `关闭（不干预输入法）`
 - 若托盘图标未显示，请检查任务栏隐藏图标区域
@@ -164,9 +164,9 @@ v4.0 及更早版本采用"先粘路径、后台再保存图片"的顺序，系�
 按可能性从高到低排查：
 
 1. **在用 v3.0 AHK 版本（或自行改编译的版本）**：旧版粘贴后固定 80ms 就把剪贴板恢复成原图片，目标窗口响应稍慢时读到的已是恢复后的图片数据，表现为"任何地方都粘不出文本"。请升级到 v4.x Rust 版本（已移除该竞态）。
-2. **目标窗口以管理员权限运行**（如管理员终端），而本工具未提权：Windows UIPI 会静默拦截模拟按键。请以管理员身份运行本工具。
+2. **目标窗口以管理员权限运行**（如管理员终端），而本工具未提权：Windows UIPI 会静默拦截模拟按键。**不要把本工具提权**；改在非提权终端里使用，或接受无法往提权窗口粘贴。
 3. **热键修饰键未松开**：Alt 未抬起时注入的 Ctrl+V 会被识别成 Ctrl+Alt+V 而失效。v4.1 增加了物理按键释放等待与 Alt 菜单屏蔽键，已大幅缓解。
-4. **安全软件拦截模拟键盘输入**（SendInput）：请将本工具加入白名单。
+4. **安全软件拦截模拟键盘输入**（SendInput）：这是预期行为。不要为了本工具关闭 AV；如需放行，只允许这一个你自己编译的 exe。
 
 **Q3：Kimi Code CLI 里粘贴路径没有变成图片？**（[issue #5](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/5)）
 
@@ -246,7 +246,18 @@ rustup target add x86_64-pc-windows-msvc
 
 ### 🕒 版本历史
 
-#### v4.1.3（当前版本，Rust） ✅
+#### v4.2.0（当前版本，本 fork，Rust） ✅
+
+- 仓库不再包含预编译 `.exe` / AutoHotkey 运行时
+- 临时图片与配置改到 `%LOCALAPPDATA%\WSLImageClipboardHelper`，并收紧 ACL
+- 临时 PNG 保留时间从 2 小时改为 30 分钟
+- Explorer 文件转换默认仅图片扩展名，避免把密钥文件喂给 Agent
+- 粘贴路径过滤控制字符 / `` ` `` / `$`；引号风格转义内部引号
+- manifest 声明 `asInvoker`，不再建议以管理员运行
+- Release 工作流只对 `v*` 标签发布，禁止分支推送覆盖资产
+- AHK / PowerShell 路径标为弃用，并限制写入/删除范围
+
+#### v4.1.3（上游，Rust） ✅
 
 - 修复启动后系统输入法列表凭空多出 `ENG / English (United States)` 的问题：不再于启动时无条件调用 `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)`（#10）
 - 英文布局改为惰性解析，默认只复用系统已装布局；确需加载时不再使用 `KLF_ACTIVATE`，并在退出时自动卸载
@@ -309,9 +320,11 @@ Many AI CLI agents (Codex, Amazon Q Developer CLI, OpenCode, Claude Code, etc.) 
 - Workaround: save image to file and pass file path to the tool
 
 #### ✅ Solution
-This project automates that workaround with a global hotkey (default `Alt+V`): it captures clipboard image data, saves a PNG file, and pastes the WSL path (`/mnt/...`) into the active input control.
+This project automates that workaround with a global hotkey (default `Alt+V`): it captures clipboard image data, saves a PNG under `%LOCALAPPDATA%\WSLImageClipboardHelper\temp`, and pastes the WSL path (`/mnt/...`) into the active input control.
 
-Current mainline release is Rust-based (`v4.0`). The recommended path is to download the prebuilt GitHub Release `v4.0` or the latest release.
+Current mainline is Rust (`v4.2`). **Build from source.** This fork does not ship `.exe` files in git.
+
+> This is an input agent: global hotkey, clipboard access, `SendInput` into the focused window. Many AI CLIs skip the file-read permission prompt when the pasted path already exists. Do not hotkey password-manager screenshots, `.env` files, or secrets. See [SECURITY.md](SECURITY.md).
 
 ### ✨ Highlights
 
@@ -322,7 +335,7 @@ Current mainline release is Rust-based (`v4.0`). The recommended path is to down
 - 🧹 Automatic cleanup for temporary PNG files
 - 🛡️ Safer clipboard parsing with memory-bound checks
 - 🪟 Embedded multi-size app icons and a DPI-aware manifest
-- 📁 Explorer file path conversion: copy files in Explorer, then press `Alt+V` to paste `/mnt/...` paths
+- 📁 Explorer file path conversion: **image files only** by default; non-images are ignored unless you enable `允许转换非图片文件` in the tray
 - 🎯 Switchable path style: plain / `@`-prefixed (for Kimi Code CLI, Gemini CLI, Qwen Code) / quoted
 
 ![clip_20260217_184919_809](./img/clip_20260217_184919_809.png)
@@ -345,46 +358,58 @@ Using this image as an example, pasting works correctly in Codex, Claude Code, a
 
 - Windows 10/11 with WSL2
 - PowerShell 5.1+
-- Rust toolchain (for building Rust version)
-- AutoHotkey v2 (only for maintaining AHK-based `v3.0`)
+- Rust toolchain (required; this is the supported install path)
+- AutoHotkey v2 (deprecated — do not rebuild the AHK helper)
 
 ### 🗂️ Directory Structure
 
 ```text
 WSL-Image-Clipboard-Helper/
 ├── README.md
+├── LICENSE
+├── SECURITY.md
 ├── docs/
-│   ├── architecture_by_codex.md
-│   ├── terminal-ctrl-v-interception.md
-│   └── rust-refactor-v3-v4.md
-├── rust/
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   ├── wsl_clipboard.toml
-│   └── src/
-├── scripts/                 # AHK scripts and legacy executable
-├── temp/                    # runtime temporary image directory
-└── wsl_clipboard.exe        # recommended prebuilt executable
+├── rust/                    # only supported implementation
+└── scripts/                 # deprecated AHK / PowerShell (see scripts/DEPRECATED.md)
 ```
 
 ### 🚀 Usage (Rust version)
 
-1. Easiest way (recommended): download the prebuilt package from GitHub Releases:
-   - `v4.1.2`: [https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/tag/v4.1.2](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/tag/v4.1.2)
-   - latest release: [https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/latest](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/releases/latest)
-2. Put `wsl_clipboard.exe` in a fixed folder (ideally with `temp/` and `wsl_clipboard.toml`).
-3. Launch `wsl_clipboard.exe`.
-4. Press hotkey (default `Alt+V`) in any editable field:
-   - With image in clipboard: save to `temp/` and paste the `/mnt/...` path.
-   - Without image in clipboard: automatically fall back to normal paste (`Ctrl+V`).
-   - In Explorer, copy one or more files, then press `Alt+V` to paste their WSL paths, such as `/mnt/c/...`.
-5. Use the tray menu for hotkey/mode switch and choose `Exit and clean temporary images` when exiting.
+1. Clone this fork and build it (the only supported install):
+
+   ```bash
+   git clone git@github.com:solSwimmer/WSL-Image-Clipboard-Helper.git
+   cd WSL-Image-Clipboard-Helper/rust
+   cargo build --release --target x86_64-pc-windows-msvc
+   ```
+
+   Output: `rust/target/x86_64-pc-windows-msvc/release/wsl_clipboard.exe`
+
+2. Put that exe in a **fixed, non-project** folder and launch it. Do not drop it inside a git repo.
+
+   Runtime files live in `%LOCALAPPDATA%\WSLImageClipboardHelper\` (`wsl_clipboard.toml` and `temp\`). The directory ACL is restricted to the current user and SYSTEM.
+
+3. Press the hotkey (default `Alt+V`) in any editable field:
+   - With an image: save under `%LOCALAPPDATA%\WSLImageClipboardHelper\temp` and paste the `/mnt/...` path.
+   - With no image: fall back to a normal `Ctrl+V`.
+   - In Explorer, copy **image files**, then press `Alt+V` to paste WSL paths. Non-images are ignored by default.
+
+4. Use the tray menu for hotkey/mode/file-type switches, and `Exit and clean temporary images` when quitting.
+
+### 🧹 Uninstall
+
+1. Tray icon → `Exit and clean temporary images`.
+2. Remove `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\wsl_clipboard.bat` if you added one.
+3. Delete the folder that holds the exe.
+4. Delete `%LOCALAPPDATA%\WSLImageClipboardHelper`.
+5. If an old build added `ENG` to your language list, remove it under Settings → Time & language → Language & region.
 
 ### ⚠️ Notes
 
 - The default hotkey is `Alt+V`; the tray menu can switch it to `Ctrl+Alt+V` or `Alt+Enter`.
-- Runtime settings are stored in `wsl_clipboard.toml` next to the executable.
-- `Exit and clean temporary images` removes temporary PNG files under `temp/`.
+- Runtime settings are stored in `%LOCALAPPDATA%\WSLImageClipboardHelper\wsl_clipboard.toml`.
+- `Exit and clean temporary images` removes PNGs under that `temp/` folder (PNGs older than 30 minutes are also cleaned periodically).
+- **Do not run this helper as Administrator.** UIPI blocking injected keys is a protection, not a bug.
 - If IME state causes paste issues, switch back to `Compatibility mode (IME guard)`.
 - To stop the helper from touching your IME at all, pick `关闭（不干预输入法）` under the tray `输入法保护` (IME guard) submenu.
 - If the tray icon is not visible, check the hidden icons area in the Windows taskbar.
@@ -409,7 +434,7 @@ CLI agents check whether the pasted path exists **at the moment the paste arrive
 
 **Q2: Hotkey fires, the PNG appears in `temp/`, IME switches — but no text is pasted anywhere.** ([issue #2](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/2))
 
-Most likely causes, in order: (1) you are on the v3.0 AHK build, which restored the clipboard 80 ms after pasting — slow target windows read the restored image instead of the path text; upgrade to v4.x. (2) The target window runs elevated while the helper does not — Windows UIPI silently drops injected keys; run the helper as administrator. (3) Hotkey modifiers still held — injected Ctrl+V turns into Ctrl+Alt+V; v4.1 waits for physical key release and adds an Alt menu-mask key. (4) Security software blocking `SendInput`.
+Most likely causes, in order: (1) you are on the v3.0 AHK build, which restored the clipboard 80 ms after pasting — slow target windows read the restored image instead of the path text; upgrade to the Rust build. (2) The target window runs elevated while the helper does not — Windows UIPI silently drops injected keys. **Do not elevate this helper**; use a non-elevated terminal instead. (3) Hotkey modifiers still held — injected Ctrl+V turns into Ctrl+Alt+V; v4.1 waits for physical key release and adds an Alt menu-mask key. (4) Security software blocking `SendInput` — expected; do not disable AV for this tool.
 
 **Q3: Kimi Code CLI does not turn the pasted path into an image.** ([issue #5](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/5))
 
@@ -426,16 +451,6 @@ Up to v4.1.2 the helper called `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)` u
 Since v4.1.3 the helper performs no keyboard-layout work at startup, resolves the English layout lazily, and by default only reuses layouts the system already has. The new default strategy `imm` never touches keyboard layouts at all; `layout-force` no longer uses `KLF_ACTIVATE`, passes `KLF_NOTELLSHELL`, and calls `UnloadKeyboardLayout` on exit. Set `ime_protection = "off"` to disable the guard entirely.
 
 If an earlier version already left English (United States) in your language list, remove it once under `Settings → Time & language → Language & region`; the new build will not add it back.
-
-If you prefer building from source:
-
-1. Clone repository:
-   ```bash
-   git clone https://github.com/cpulxb/WSL-Image-Clipboard-Helper.git
-   cd WSL-Image-Clipboard-Helper
-   ```
-2. Build with the commands in the next section.
-3. Launch the built `wsl_clipboard.exe`.
 
 ### 🛠️ Build (Rust)
 
@@ -459,6 +474,7 @@ cargo clean
 
 ### 🕒 Version Line
 
+- `v4.2.0`: this fork — no committed binaries, AppData temp + ACL, image-only Explorer paste, tag-only releases
 - `v4.1.3`: no more phantom `ENG` keyboard layout on startup — lazy English-layout resolution plus the new `ime_protection` setting (#10)
 - `v4.1.2`: dismiss the target window's menu mode (fast Alt release) before injecting Ctrl+V so pastes are not swallowed
 - `v4.1.1`: treat all-zero alpha in 32-bit clipboard DIBs as opaque so saved PNGs are not fully transparent

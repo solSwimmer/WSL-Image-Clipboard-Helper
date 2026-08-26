@@ -1,6 +1,5 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 /// 应用配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +22,11 @@ pub struct AppConfig {
     /// 旧版配置文件没有该字段，缺省按 imm 处理
     #[serde(default)]
     pub ime_protection: ImeProtection,
+
+    /// 是否把资源管理器里复制的非图片文件也转成 WSL 路径。
+    /// 默认 false：只转换图片扩展名，避免 Alt+V 把 .env / 密钥文件喂给 Agent。
+    #[serde(default)]
+    pub allow_non_image_files: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,11 +59,16 @@ pub enum PathStyle {
 impl PathStyle {
     /// 将一组 WSL 路径格式化为最终粘贴文本
     pub fn format_paths(&self, paths: &[String]) -> String {
+        let paths: Vec<String> = paths
+            .iter()
+            .filter_map(|p| crate::paths::sanitize_pasted_path(p))
+            .collect();
+
         match self {
             PathStyle::Plain => paths.join("\n"),
             PathStyle::Quoted => paths
                 .iter()
-                .map(|p| format!("\"{}\"", p))
+                .map(|p| crate::paths::quote_wsl_path(p))
                 .collect::<Vec<_>>()
                 .join("\n"),
             // @ 引用需要空格断词：多个路径用空格分隔，并保留尾随空格，
@@ -145,6 +154,24 @@ impl ImeProtection {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::PathStyle;
+
+    #[test]
+    fn quoted_style_escapes_and_plain_drops_unsafe() {
+        let paths = vec![
+            "/mnt/c/foo bar.png".into(),
+            "/mnt/c/bad\n/etc/passwd".into(),
+        ];
+        assert_eq!(
+            PathStyle::Quoted.format_paths(&paths),
+            "\"/mnt/c/foo bar.png\""
+        );
+        assert_eq!(PathStyle::Plain.format_paths(&paths), "/mnt/c/foo bar.png");
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -153,16 +180,27 @@ impl Default for AppConfig {
             paste_format: PasteFormat::Plain,
             path_style: PathStyle::default(),
             ime_protection: ImeProtection::default(),
+            allow_non_image_files: false,
         }
     }
 }
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
-        let config_path = Self::config_path()?;
+        let config_path = crate::paths::config_path()?;
 
         if !config_path.exists() {
-            // 创建默认配置
+            if let Some(portable) = crate::paths::portable_config_path() {
+                if portable.exists() {
+                    let content = std::fs::read_to_string(&portable)
+                        .context("读取旧版配置文件失败")?;
+                    let config: Self = toml::from_str(&content)
+                        .context("解析旧版配置文件失败")?;
+                    config.save()?;
+                    return Ok(config);
+                }
+            }
+
             let default = Self::default();
             default.save()?;
             return Ok(default);
@@ -178,7 +216,10 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
-        let path = Self::config_path()?;
+        let path = crate::paths::config_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).context("创建配置目录失败")?;
+        }
         let content = toml::to_string_pretty(self)
             .context("序列化配置失败")?;
 
@@ -186,15 +227,5 @@ impl AppConfig {
             .context("写入配置文件失败")?;
 
         Ok(())
-    }
-
-    fn config_path() -> anyhow::Result<PathBuf> {
-        let exe_dir = std::env::current_exe()
-            .context("获取可执行文件路径失败")?
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-
-        Ok(exe_dir.join("wsl_clipboard.toml"))
     }
 }

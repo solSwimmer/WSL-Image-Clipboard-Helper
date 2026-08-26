@@ -2,15 +2,23 @@ param(
     [string]$FilePath
 )
 
-# This script saves clipboard images to the specified file path.
-# Called asynchronously by AHK, no need to return anything.
+# Deprecated. Use the Rust build. This script will only write a .png under a \temp\ folder.
 
 if (-not $FilePath) {
-    exit
+    exit 1
 }
 
-$dir = Split-Path -Parent $FilePath
-if (-not (Test-Path $dir)) {
+try {
+    $full = [System.IO.Path]::GetFullPath($FilePath)
+} catch {
+    exit 1
+}
+
+if ($full -match '\.\.') { exit 1 }
+if ($full -notmatch '(?i)\\temp\\[^\\/]+\.png$') { exit 1 }
+
+$dir = Split-Path -Parent $full
+if (-not (Test-Path -LiteralPath $dir)) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
 
@@ -20,7 +28,7 @@ Add-Type -AssemblyName System.Drawing
 if ([System.Windows.Forms.Clipboard]::ContainsImage()) {
     try {
         $image = [System.Windows.Forms.Clipboard]::GetImage()
-        $image.Save($FilePath, [System.Drawing.Imaging.ImageFormat]::Png)
+        $image.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
         $image.Dispose()
     } catch {
         # Save failed, silently ignore

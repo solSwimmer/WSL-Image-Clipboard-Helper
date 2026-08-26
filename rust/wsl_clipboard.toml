@@ -1,7 +1,8 @@
-hotkey = "!Enter"
-runtime_mode = "safe"
+hotkey = "!v"
+runtime_mode = "fast"
 paste_format = "plain"
 path_style = "plain"
+allow_non_image_files = false
 
 # 输入法保护策略（仅 runtime_mode = "safe" 时生效）
 #   off          = 完全不干预输入法
