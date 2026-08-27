@@ -36,7 +36,7 @@ serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
 
 # 错误处理
-anyhow = "1.0"
+anyhow = "1.0.103"
 thiserror = "1.0"
 
 # 图片处理 (可选)
