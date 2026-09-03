@@ -26,7 +26,7 @@ global gLastImageWslPath := ""
 global gPendingSaveWinPath := ""
 global gPendingSaveStartedAt := 0
 
-; 缓存英文输入法 HKL（en-US）
+; Cache the English IME HKL (en-US).
 global gEngHKL := DllCall("user32.dll\LoadKeyboardLayoutW", "WStr", "00000409", "UInt", 0x1, "UPtr")
 
 SetupTrayMenu()
@@ -44,7 +44,7 @@ OnExit(HandleExit)
 !Enter::HandlePasteHotkey()
 #HotIf
 
-; ------------------ 粘贴热键：路径优先 + 输入法保护 ------------------
+; ------------------ Paste hotkey: path-first + IME guard ------------------
 HandlePasteHotkey(*) {
     global gTempDir, gPsScript, gEngHKL
     local withImeGuard := IsImeGuardEnabled()
@@ -54,30 +54,30 @@ HandlePasteHotkey(*) {
 
     RefreshPendingSaveState()
 
-    ; 剪贴板中没有图片时，回退到普通粘贴，避免无效路径输出
+    ; No image on the clipboard: fall back to a normal paste so we do not emit a bogus path.
     if !ClipboardHasImage() {
         NormalizeModifierStateBeforeSend()
         Send("^v")
         return
     }
 
-    ; 稳定模式下启用输入法保护；极速模式跳过此步骤以降低触发延迟
+    ; Enable IME guard in stable mode; skip it in fast mode to cut trigger latency.
     if (withImeGuard) {
-        ; 1) 获取当前活动窗口和线程 ID
+        ; 1) Get the active window and thread ID.
         local hwnd := WinActive("A")
         local threadId := hwnd ? DllCall("user32.dll\GetWindowThreadProcessId", "UInt", hwnd, "UInt", 0, "UInt") : 0
 
-        ; 2) 保存当前键盘布局
+        ; 2) Save the current keyboard layout.
         prevHKL := threadId ? DllCall("user32.dll\GetKeyboardLayout", "UInt", threadId, "UPtr") : 0
 
-        ; 3) 切换到英文输入法（仅在布局不同的时候切换，减少切换开销）
+        ; 3) Switch to the English IME only when the layout differs, to avoid extra work.
         if (gEngHKL != 0 && prevHKL != gEngHKL) {
             PostMessage(0x50, 0, gEngHKL, , "A")
             Sleep 60
         }
     }
 
-    ; 4) 附件模式下，若剪贴板未变化且缓存文件仍存在，则直接复用，避免重复落盘
+    ; 4) In attachment mode, reuse the cached file if the clipboard is unchanged and the file still exists.
     if attachmentMode && TryPasteCachedAttachment(clipSeq) {
         if (withImeGuard) {
             ScheduleKeyboardLayoutRestore(prevHKL, 120)
@@ -91,25 +91,25 @@ HandlePasteHotkey(*) {
         return
     }
 
-    ; 5) 生成高精度文件名，避免同一秒内触发导致文件名冲突
+    ; 5) High-resolution filename so two triggers in the same second do not collide.
     local fileName := FormatTime(, "yyyyMMdd_HHmmss") "_" Format("{:03}", A_MSec + 0) ".png"
     local winPath := gTempDir "\" fileName
 
-    ; 6) 附件通道（实验）：无需 @，优先触发客户端附件渲染
+    ; 6) Attachment channel (experimental): no @; prefer triggering client attachment rendering.
     if attachmentMode {
         if TryPasteAsAttachment(winPath) {
             SaveImageCache(winPath)
-            ; 附件通道已完成，后续无需再发送文本或异步保存
+            ; Attachment channel is done; no need to send text or save asynchronously.
             if (withImeGuard) {
                 ScheduleKeyboardLayoutRestore(prevHKL, 120)
             }
             return
         }
-        ; 附件通道失败时，回退到纯路径（兼容）避免无响应
-        NotifyUser("附件模式回退", "附件通道失败，已回退为纯路径。", 2500, false)
+        ; Attachment channel failed; fall back to a plain path so the hotkey still does something.
+        NotifyUser("Attachment mode fallback", "Attachment channel failed; fell back to a plain path.", 2500, false)
     }
 
-    ; 7) 仅在需要文本路径时再计算 WSL 路径（减少附件成功路径上的开销）
+    ; 7) Compute the WSL path only when a text path is needed (skip this cost on a successful attachment paste).
     local wslPath := BuildWslPath(winPath, fileName)
     if (wslPath = "") {
         if (withImeGuard) {
@@ -120,7 +120,7 @@ HandlePasteHotkey(*) {
         return
     }
 
-    ; 8) 备份剪贴板（含图片），写入文本路径后用 Ctrl+V 瞬间粘贴，再恢复剪贴板
+    ; 8) Back up the clipboard (including the image), write the text path, paste with Ctrl+V, then restore.
     local pasteText := BuildPasteText(wslPath)
     SavePlainPathCache(clipSeq, winPath, wslPath)
 
@@ -132,13 +132,13 @@ HandlePasteHotkey(*) {
     A_Clipboard := savedClip
     savedClip := ""
 
-    ; 9) 异步调用 PowerShell 保存图片（不阻塞，剪贴板已恢复）
+    ; 9) Save the image asynchronously via PowerShell (non-blocking; clipboard already restored).
     if !TriggerAsyncSaveIfNeeded(winPath) {
-        ; 路径已经粘贴了，但保存失败时给用户一个温和提示
-        NotifyUser("图片保存失败", "路径已粘贴，但图片未保存。", 3000, true)
+        ; Path was pasted, but save failed — give a mild hint.
+        NotifyUser("Image save failed", "The path was pasted, but the image was not saved.", 3000, true)
     }
 
-    ; 10) 稳定模式下延迟恢复输入法，不阻塞主热键线程
+    ; 10) In stable mode, restore IME after a delay without blocking the hotkey thread.
     if (withImeGuard) {
         ScheduleKeyboardLayoutRestore(prevHKL, 120)
     }
@@ -160,7 +160,7 @@ BuildSaveAndSetAttachmentCommand(winPath) {
 }
 
 TryPasteAsAttachment(winPath) {
-    ; 附件通道性能优化：单进程完成“保存图片 + 设置附件剪贴板”
+    ; Attachment-channel performance: save the image and set the attachment clipboard in one process.
     if !SaveAndSetAttachmentSync(winPath) {
         return false
     }
@@ -255,14 +255,14 @@ RefreshPendingSaveState() {
         return
     }
 
-    ; 文件已落盘则清除“进行中”标记。
+    ; File is on disk; clear the in-progress flag.
     if FileExist(gPendingSaveWinPath) {
         gPendingSaveWinPath := ""
         gPendingSaveStartedAt := 0
         return
     }
 
-    ; 超过 10 秒仍未成功，认为上次异步保存异常，允许重试。
+    ; Still not saved after 10 seconds: treat the last async save as failed and allow a retry.
     if (gPendingSaveStartedAt != 0 && A_TickCount - gPendingSaveStartedAt > 10000) {
         gPendingSaveWinPath := ""
         gPendingSaveStartedAt := 0
@@ -296,7 +296,7 @@ TriggerAsyncSaveIfNeeded(winPath) {
 SaveAndSetAttachmentSync(winPath) {
     global gSaveAndSetAttachmentScript
     if !FileExist(gSaveAndSetAttachmentScript) {
-        ; 脚本缺失时降级到旧流程，保证可用性
+        ; Script missing: fall back to the old flow so the helper still works.
         if !SaveClipboardImageSync(winPath) {
             return false
         }
@@ -342,11 +342,11 @@ ClipboardHasImage() {
 }
 
 NormalizeModifierStateBeforeSend() {
-    ; 释放修饰键状态，避免 Alt 组合键触发后输入框吞字符
+    ; Release modifiers so an Alt combo does not make the input box swallow characters.
     SendInput("{Alt up}{Ctrl up}{Shift up}")
 }
 
-; ------------------ 恢复键盘布局的辅助函数 ------------------
+; ------------------ Helpers to restore the keyboard layout ------------------
 RestoreKeyboardLayout(hkl) {
     if (hkl != 0) {
         PostMessage(0x50, 0, hkl, , "A")
@@ -383,14 +383,14 @@ BuildPasteText(wslPath) {
     global gPasteFormat
     switch gPasteFormat {
         case "attachment":
-            ; 附件通道失败时，回退到纯路径
+            ; Attachment channel failed; fall back to a plain path.
             return wslPath
         default:
             return wslPath
     }
 }
 
-; ------------------ 退出时的清理逻辑（调用 exit-all.ps1） ------------------
+; ------------------ Exit cleanup (calls exit-all.ps1) ------------------
 HandleExit(ExitReason, ExitCode) {
     CleanupAndExit(False)
 }
@@ -401,7 +401,7 @@ ExitFromTray(*) {
 
 GetFullPath(path) {
     bufSize := 260  ; MAX_PATH
-    buf := Buffer(bufSize * 2)  ; 每个字符2字节（Unicode）
+    buf := Buffer(bufSize * 2)  ; 2 bytes per character (Unicode)
     DllCall("GetFullPathNameW", "Str", path, "UInt", bufSize, "Ptr", buf, "Ptr", 0)
     return StrGet(buf)
 }
@@ -414,7 +414,7 @@ CleanupAndExit(shouldExit) {
         try {
             RunWait(Format('powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}" -TempDir "{2}"', gExitScript, gTempDir), gScriptDir, "Hide")
         } catch {
-            ; 清理脚本失败时静默忽略，确保主程序仍可退出
+            ; Ignore cleanup-script failures so the main program can still exit.
         }
     }
     if (shouldExit) {
@@ -436,17 +436,17 @@ InitializeHelperScripts() {
         try {
             DirCreate(gTempDir)
         } catch {
-            ; 创建失败时忽略
+            ; Ignore create failures.
         }
     }
 
-    ; 预计算 temp 目录的 WSL 路径，减少每次热键触发时的转换开销
+    ; Precompute the WSL path of the temp directory to avoid converting on every hotkey.
     local convertedDir := ConvertPathToWsl(gTempDir)
     if (convertedDir != "") {
         gWslTempDir := RTrim(convertedDir, "/")
     }
 
-    SetTimer(CleanupTempFolder, 2 * 60 * 60 * 1000)  ; 每两个小时执行一次
+    SetTimer(CleanupTempFolder, 2 * 60 * 60 * 1000)  ; every two hours
 
 }
 
@@ -459,15 +459,15 @@ SetupTrayMenu() {
     gHotkeyMenu.Add("Ctrl+Alt+V", UseHotkeyCtrlAltV)
     gHotkeyMenu.Add("Alt+Enter", UseHotkeyAltEnter)
     gSpeedModeMenu := Menu()
-    gSpeedModeMenu.Add("稳定模式（输入法保护）", UseSpeedModeSafe)
-    gSpeedModeMenu.Add("极速模式（更快）", UseSpeedModeFast)
+    gSpeedModeMenu.Add("Stable mode (IME guard)", UseSpeedModeSafe)
+    gSpeedModeMenu.Add("Fast mode (faster)", UseSpeedModeFast)
     gPasteFormatMenu := Menu()
-    gPasteFormatMenu.Add("附件通道（无@，实验）", UsePasteFormatAttachment)
-    gPasteFormatMenu.Add("纯路径（兼容）", UsePasteFormatPlain)
-    A_TrayMenu.Add("切换快捷键", gHotkeyMenu)
-    A_TrayMenu.Add("运行模式", gSpeedModeMenu)
-    A_TrayMenu.Add("粘贴格式", gPasteFormatMenu)
-    A_TrayMenu.Add("打开图片缓存", ShowTempFolder)
+    gPasteFormatMenu.Add("Attachment channel (no @, experimental)", UsePasteFormatAttachment)
+    gPasteFormatMenu.Add("Plain path (compatible)", UsePasteFormatPlain)
+    A_TrayMenu.Add("Switch hotkey", gHotkeyMenu)
+    A_TrayMenu.Add("Run mode", gSpeedModeMenu)
+    A_TrayMenu.Add("Paste format", gPasteFormatMenu)
+    A_TrayMenu.Add("Open image cache", ShowTempFolder)
     A_TrayMenu.Add()
     A_TrayMenu.Add("Exit", ExitFromTray)
 }
@@ -520,7 +520,7 @@ SaveSpeedModeConfig(mode) {
     try {
         IniWrite(mode, gConfigFile, "Runtime", "Mode")
     } catch {
-        ; 配置写入失败时静默忽略，不影响主流程
+        ; Ignore config write failures; they must not break the main flow.
     }
 }
 
@@ -538,7 +538,7 @@ SavePasteFormatConfig(format) {
     try {
         IniWrite(format, gConfigFile, "Output", "Format")
     } catch {
-        ; 配置写入失败时静默忽略，不影响主流程
+        ; Ignore config write failures; they must not break the main flow.
     }
 }
 
@@ -556,7 +556,7 @@ SaveHotkeyConfig(hotkey) {
     try {
         IniWrite(hotkey, gConfigFile, "Hotkey", "Paste")
     } catch {
-        ; 配置写入失败时静默忽略，不影响主流程
+        ; Ignore config write failures; they must not break the main flow.
     }
 }
 
@@ -569,7 +569,7 @@ SwitchHotkeyTo(targetHotkey) {
     gCurrentHotkey := targetHotkey
     SaveHotkeyConfig(targetHotkey)
     UpdateHotkeyMenuState()
-    NotifyUser("快捷键已切换", "当前为 " HotkeyToLabel(targetHotkey), 1800)
+    NotifyUser("Hotkey switched", "Now " HotkeyToLabel(targetHotkey), 1800)
 }
 
 SwitchSpeedModeTo(targetMode) {
@@ -581,7 +581,7 @@ SwitchSpeedModeTo(targetMode) {
     gSpeedMode := targetMode
     SaveSpeedModeConfig(targetMode)
     UpdateSpeedModeMenuState()
-    NotifyUser("运行模式已切换", "当前为 " SpeedModeToLabel(targetMode), 2200)
+    NotifyUser("Run mode switched", "Now " SpeedModeToLabel(targetMode), 2200)
 }
 
 UseHotkeyAltV(*) {
@@ -621,7 +621,7 @@ SwitchPasteFormatTo(targetFormat) {
     gPasteFormat := targetFormat
     SavePasteFormatConfig(targetFormat)
     UpdatePasteFormatMenuState()
-    NotifyUser("粘贴格式已切换", "当前为 " PasteFormatToLabel(targetFormat), 2200)
+    NotifyUser("Paste format switched", "Now " PasteFormatToLabel(targetFormat), 2200)
 }
 
 UpdateHotkeyMenuState() {
@@ -647,8 +647,8 @@ UpdateSpeedModeMenuState() {
         return
     }
 
-    gSpeedModeMenu.Uncheck("稳定模式（输入法保护）")
-    gSpeedModeMenu.Uncheck("极速模式（更快）")
+    gSpeedModeMenu.Uncheck("Stable mode (IME guard)")
+    gSpeedModeMenu.Uncheck("Fast mode (faster)")
 
     local modeLabel := SpeedModeToLabel(gSpeedMode)
     if (modeLabel != "") {
@@ -663,8 +663,8 @@ UpdatePasteFormatMenuState() {
         return
     }
 
-    gPasteFormatMenu.Uncheck("附件通道（无@，实验）")
-    gPasteFormatMenu.Uncheck("纯路径（兼容）")
+    gPasteFormatMenu.Uncheck("Attachment channel (no @, experimental)")
+    gPasteFormatMenu.Uncheck("Plain path (compatible)")
 
     local formatLabel := PasteFormatToLabel(gPasteFormat)
     if (formatLabel != "") {
@@ -722,9 +722,9 @@ IsSupportedPasteFormat(format) {
 PasteFormatToLabel(format) {
     switch format {
         case "attachment":
-            return "附件通道（无@，实验）"
+            return "Attachment channel (no @, experimental)"
         case "plain":
-            return "纯路径（兼容）"
+            return "Plain path (compatible)"
         default:
             return ""
     }
@@ -733,9 +733,9 @@ PasteFormatToLabel(format) {
 PasteFormatToShortLabel(format) {
     switch format {
         case "attachment":
-            return "附件"
+            return "Attachment"
         case "plain":
-            return "路径"
+            return "Path"
         default:
             return ""
     }
@@ -744,9 +744,9 @@ PasteFormatToShortLabel(format) {
 SpeedModeToLabel(mode) {
     switch mode {
         case "safe":
-            return "稳定模式（输入法保护）"
+            return "Stable mode (IME guard)"
         case "fast":
-            return "极速模式（更快）"
+            return "Fast mode (faster)"
         default:
             return ""
     }
@@ -755,9 +755,9 @@ SpeedModeToLabel(mode) {
 SpeedModeToShortLabel(mode) {
     switch mode {
         case "safe":
-            return "稳定"
+            return "Stable"
         case "fast":
-            return "极速"
+            return "Fast"
         default:
             return ""
     }
@@ -777,12 +777,12 @@ IsAttachmentPasteMode() {
     return gPasteFormat = "attachment"
 }
 
-; ------------------ 工具函数：把 Windows 路径转换为 WSL 路径 ------------------
+; ------------------ Convert a Windows path to a WSL path ------------------
 ConvertPathToWsl(winPath) {
     local p := Trim(winPath, '"')
 
-    ; 只转换驱动器路径。不再回退到 `cmd.exe /C wsl wslpath`，
-    ; 避免 cmd 对 %VAR% 的展开以及引号拼接带来的命令注入。
+    ; Drive paths only. Do not fall back to `cmd.exe /C wsl wslpath`,
+    ; which expands %VAR% and is command-injection-prone when quotes are spliced.
     if RegExMatch(p, "^[A-Za-z]:\\") {
         local drive := SubStr(p, 1, 1)
         local rest := SubStr(p, 3)
@@ -795,17 +795,17 @@ ConvertPathToWsl(winPath) {
 }
 
 
-; 通用提示函数：托盘提示 + 可选蜂鸣，带简单去抖避免刷屏
+; Generic notify: tray tip + optional beep, with simple debounce to avoid spam.
 NotifyUser(title, msg, durationMs := 2500, beep := false) {
     global gLastNotifyAt
     now := A_TickCount
-    if (now - gLastNotifyAt < 800)  ; 800ms 去抖
+    if (now - gLastNotifyAt < 800)  ; 800ms debounce
         return
     gLastNotifyAt := now
 
     TrayTip(title, msg, durationMs)
     if (beep) {
-        SoundBeep(750, 120)  ; 轻微提示音
+        SoundBeep(750, 120)  ; short hint beep
     }
 }
 
@@ -823,12 +823,12 @@ CleanupTempFolder(*) {
             gPendingSaveStartedAt := 0
         }
         Loop Files gTempDir "\*.png", "F" {
-            ; 新时间在前，旧时间在后，得到正的秒数差
+            ; Newer time first, older second, so the second count is positive.
             if (DateDiff(A_Now, A_LoopFileTimeModified, "Seconds") > 7200) {
                 FileDelete(A_LoopFileFullPath)
             }
         }
     } catch {
-        ; 忽略清理失败
+        ; Ignore cleanup failures.
     }
 }

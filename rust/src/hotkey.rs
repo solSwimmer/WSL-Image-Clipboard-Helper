@@ -5,7 +5,7 @@ use global_hotkey::{
 };
 use tracing::{info, warn};
 
-/// 可用的热键列表
+/// Supported hotkeys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyType {
     AltV,
@@ -44,7 +44,7 @@ impl HotkeyType {
     }
 }
 
-/// 简化的热键管理器，必须在有 Win32 消息循环的线程上创建
+/// Lightweight hotkey manager; must be created on a thread with a Win32 message loop.
 pub struct HotkeyManager {
     manager: GlobalHotKeyManager,
     current_hotkey: Option<HotKey>,
@@ -60,7 +60,7 @@ impl HotkeyManager {
         })
     }
 
-    /// 注册热键
+    /// Register a hotkey.
     pub fn register(&mut self, hotkey_type: HotkeyType) -> Result<()> {
         if self.current_type == hotkey_type && self.current_hotkey.is_some() {
             return Ok(());
@@ -70,15 +70,15 @@ impl HotkeyManager {
         let (mods, key) = parse_hotkey(hotkey_type.as_str())?;
         let new_hotkey = HotKey::new(Some(mods), key);
 
-        // 先注册新热键，避免失败时丢失旧热键绑定
+        // Register the new hotkey first so a failure cannot drop the old binding.
         self.manager.register(new_hotkey)?;
 
-        // 新热键注册成功后再卸载旧热键，失败时回滚新热键
+        // Unregister the old hotkey only after the new one is live; roll back on failure.
         if let Some(old_hotkey) = previous_hotkey {
             if let Err(e) = self.manager.unregister(old_hotkey) {
                 if let Err(rollback_err) = self.manager.unregister(new_hotkey) {
                     warn!(
-                        "回滚热键失败: 新热键={:?}, 错误={:?}",
+                        "hotkey rollback failed: new={:?}, error={:?}",
                         hotkey_type,
                         rollback_err
                     );
@@ -90,27 +90,27 @@ impl HotkeyManager {
         self.current_hotkey = Some(new_hotkey);
         self.current_type = hotkey_type;
 
-        info!("已注册热键: {}", hotkey_type.display_name());
+        info!("registered hotkey: {}", hotkey_type.display_name());
         Ok(())
     }
 
-    /// 注销当前热键
+    /// Unregister the current hotkey.
     pub fn unregister(&mut self) -> Result<()> {
         if let Some(hotkey) = self.current_hotkey.take() {
             self.manager.unregister(hotkey)?;
-            info!("已注销热键");
+            info!("unregistered hotkey");
         }
         Ok(())
     }
 
-    /// 获取当前热键类型
+    /// Current hotkey type.
     pub fn current_type(&self) -> HotkeyType {
         self.current_type
     }
 }
 
-/// 启动热键桥接：在 spawn_blocking 中监听 GlobalHotKeyEvent，
-/// 通过 tokio mpsc 通道发送到主循环
+/// Start the hotkey bridge: listen for GlobalHotKeyEvent on spawn_blocking
+/// and forward events to the main loop over a tokio mpsc channel.
 pub fn start_hotkey_bridge() -> tokio::sync::mpsc::Receiver<u32> {
     let (tx, rx) = tokio::sync::mpsc::channel::<u32>(32);
 
@@ -121,7 +121,7 @@ pub fn start_hotkey_bridge() -> tokio::sync::mpsc::Receiver<u32> {
                 Ok(event) => {
                     if event.state == global_hotkey::HotKeyState::Pressed {
                         if tx.blocking_send(event.id).is_err() {
-                            break; // 接收端已关闭
+                            break; // receiver dropped
                         }
                     }
                 }
@@ -135,7 +135,7 @@ pub fn start_hotkey_bridge() -> tokio::sync::mpsc::Receiver<u32> {
     rx
 }
 
-/// 解析热键组合字符串
+/// Parse a hotkey combo string.
 fn parse_hotkey(combo: &str) -> Result<(Modifiers, Code)> {
     let combo_lower = combo.to_lowercase();
     let mut mods = Modifiers::empty();
@@ -150,7 +150,7 @@ fn parse_hotkey(combo: &str) -> Result<(Modifiers, Code)> {
         mods |= Modifiers::SHIFT;
     }
 
-    // 提取按键
+    // Extract the key.
     let key_str = combo
         .replace("Ctrl+", "")
         .replace("Control+", "")
@@ -163,7 +163,7 @@ fn parse_hotkey(combo: &str) -> Result<(Modifiers, Code)> {
         .to_lowercase();
 
     let key = parse_key_code(&key_str)
-        .ok_or_else(|| anyhow::anyhow!("无效的键名: {}", key_str))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid key name: {}", key_str))?;
 
     Ok((mods, key))
 }
