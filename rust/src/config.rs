@@ -1,30 +1,30 @@
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-/// 应用配置
+/// Application config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// 热键组合: "!v", "^!v", "!Enter"
+    /// Hotkey combo: "!v", "^!v", "!Enter"
     pub hotkey: String,
 
-    /// 运行模式: "safe" (输入法保护), "fast" (极速)
+    /// Runtime mode: "safe" (IME guard), "fast" (low latency)
     pub runtime_mode: RuntimeMode,
 
-    /// 粘贴格式: "plain" (路径), "attachment" (附件)
+    /// Paste format: "plain" (path), "attachment" (attachment)
     pub paste_format: PasteFormat,
 
-    /// 路径粘贴风格: "plain" (纯路径), "at" (@ 前缀), "quoted" (引号包裹)
-    /// 旧版配置文件没有该字段，缺省按 plain 处理
+    /// Path paste style: "plain" (raw path), "at" (`@` prefix), "quoted" (quoted)
+    /// Older config files omit this field; default is plain.
     #[serde(default)]
     pub path_style: PathStyle,
 
-    /// 输入法保护策略（仅在 runtime_mode = "safe" 时生效）
-    /// 旧版配置文件没有该字段，缺省按 imm 处理
+    /// IME guard strategy (only applies when runtime_mode = "safe")
+    /// Older config files omit this field; default is imm.
     #[serde(default)]
     pub ime_protection: ImeProtection,
 
-    /// 是否把资源管理器里复制的非图片文件也转成 WSL 路径。
-    /// 默认 false：只转换图片扩展名，避免 Alt+V 把 .env / 密钥文件喂给 Agent。
+    /// Also convert non-image files copied in Explorer to WSL paths.
+    /// Default false: image extensions only, so Alt+V does not feed `.env` / secrets to the agent.
     #[serde(default)]
     pub allow_non_image_files: bool,
 }
@@ -43,10 +43,10 @@ pub enum PasteFormat {
     Attachment,
 }
 
-/// 路径粘贴风格
-/// - Plain: `/mnt/c/...`，Claude Code / Codex / OpenCode 可直接识别为图片
-/// - At: `@/mnt/c/... `，适配 Kimi Code CLI / Gemini CLI / Qwen Code 等 @ 文件引用语法
-/// - Quoted: `"/mnt/c/..."`，用于含空格路径或直接喂给 shell 命令
+/// Path paste style.
+/// - Plain: `/mnt/c/...`, which Claude Code / Codex / OpenCode can treat as an image
+/// - At: `@/mnt/c/... `, `@file` syntax used by Kimi Code CLI / Gemini CLI / Qwen Code
+/// - Quoted: `"/mnt/c/..."`, for paths with spaces or feeding a shell command
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PathStyle {
@@ -57,7 +57,7 @@ pub enum PathStyle {
 }
 
 impl PathStyle {
-    /// 将一组 WSL 路径格式化为最终粘贴文本
+    /// Format a set of WSL paths into the final paste text.
     pub fn format_paths(&self, paths: &[String]) -> String {
         let paths: Vec<String> = paths
             .iter()
@@ -71,8 +71,8 @@ impl PathStyle {
                 .map(|p| crate::paths::quote_wsl_path(p))
                 .collect::<Vec<_>>()
                 .join("\n"),
-            // @ 引用需要空格断词：多个路径用空格分隔，并保留尾随空格，
-            // 这样 CLI 能立刻结束文件引用解析，用户也可以直接继续输入
+            // `@` references are space-delimited; keep a trailing space so the CLI
+            // can finish parsing the file reference and the user can keep typing.
             PathStyle::At => {
                 let joined = paths
                     .iter()
@@ -86,47 +86,48 @@ impl PathStyle {
 
     pub fn display_name(&self) -> &'static str {
         match self {
-            PathStyle::Plain => "纯路径（Claude/Codex/OpenCode）",
-            PathStyle::At => "@ 路径（Kimi/Gemini/Qwen）",
-            PathStyle::Quoted => "引号路径（含空格场景）",
+            PathStyle::Plain => "Plain path (Claude/Codex/OpenCode)",
+            PathStyle::At => "@ path (Kimi/Gemini/Qwen)",
+            PathStyle::Quoted => "Quoted path (spaces)",
         }
     }
 }
 
-/// 输入法保护策略（issue #10）
+/// IME guard strategy (issue #10).
 ///
-/// 背景：早期版本在**启动时**就无条件调用 `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)`
-/// 预加载英文布局。`LoadKeyboardLayoutW` 会把该布局登记进**系统**的输入法列表，
-/// 于是只要本工具一启动，`Win + Space` 里就会凭空多出
-/// `ENG / English (United States)`，任务栏输入法图标也会重新出现——
-/// 即使用户的语言列表里根本没有添加过英语。
+/// Background: early builds called `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)`
+/// **at startup** to preload the English layout. `LoadKeyboardLayoutW` registers
+/// that layout with the **system** input list, so launching the helper added a
+/// phantom `ENG / English (United States)` entry in `Win + Space` and brought
+/// the taskbar IME icon back — even when the user had never added English.
 ///
-/// 现在改为按策略惰性处理，从"零副作用"到"完全兼容旧行为"依次递进：
-/// - `Off`：完全不碰输入法与键盘布局
-/// - `Imm`：只关闭前台窗口的 IME 输入状态（直接输入），不触碰键盘布局 —— 默认
-/// - `Layout`：切换到英文键盘布局，但**只复用系统里已加载的**英文布局，绝不新增
-/// - `LayoutForce`：找不到英文布局时才惰性加载（不带 KLF_ACTIVATE），并在退出时卸载
+/// Handling is now lazy and policy-driven, from "zero side effects" up to
+/// "fully compatible with the old behaviour":
+/// - `Off`: never touch IME or keyboard layouts
+/// - `Imm`: close only the foreground window's IME open status (direct input); do not touch layouts — default
+/// - `Layout`: switch to an English layout, but **only reuse one already loaded**; never add one
+/// - `LayoutForce`: load English lazily if none is found (without KLF_ACTIVATE), and unload it on exit
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ImeProtection {
-    /// 完全关闭输入法保护
+    /// Disable IME protection entirely.
     Off,
-    /// 仅关闭前台窗口 IME 输入状态（零副作用，不会新增键盘布局）
+    /// Close only the foreground window's IME open status (zero side effects; does not add a layout).
     #[default]
     Imm,
-    /// 切换到英文键盘布局，但只复用已加载的布局
+    /// Switch to an English keyboard layout, but only reuse one already loaded.
     Layout,
-    /// 切换到英文键盘布局，必要时惰性加载（退出时卸载）
+    /// Switch to an English keyboard layout, loading it lazily if needed (unloaded on exit).
     LayoutForce,
 }
 
 impl ImeProtection {
     pub fn display_name(&self) -> &'static str {
         match self {
-            ImeProtection::Off => "关闭（不干预输入法）",
-            ImeProtection::Imm => "关闭 IME 输入状态（推荐，无副作用）",
-            ImeProtection::Layout => "切英文布局（仅复用已装布局）",
-            ImeProtection::LayoutForce => "切英文布局（必要时加载 ENG）",
+            ImeProtection::Off => "Off (do not touch IME)",
+            ImeProtection::Imm => "Close IME input (recommended, no side effects)",
+            ImeProtection::Layout => "English layout (reuse installed only)",
+            ImeProtection::LayoutForce => "English layout (load ENG if needed)",
         }
     }
 
@@ -139,7 +140,7 @@ impl ImeProtection {
         }
     }
 
-    /// 该策略是否允许通过 LoadKeyboardLayoutW 向系统新增英文布局
+    /// Whether this policy may add an English layout via LoadKeyboardLayoutW.
     pub fn allows_loading_layout(&self) -> bool {
         matches!(self, ImeProtection::LayoutForce)
     }
@@ -193,9 +194,9 @@ impl AppConfig {
             if let Some(portable) = crate::paths::portable_config_path() {
                 if portable.exists() {
                     let content = std::fs::read_to_string(&portable)
-                        .context("读取旧版配置文件失败")?;
+                        .context("failed to read legacy config file")?;
                     let config: Self = toml::from_str(&content)
-                        .context("解析旧版配置文件失败")?;
+                        .context("failed to parse legacy config file")?;
                     config.save()?;
                     return Ok(config);
                 }
@@ -207,10 +208,10 @@ impl AppConfig {
         }
 
         let content = std::fs::read_to_string(&config_path)
-            .context("读取配置文件失败")?;
+            .context("failed to read config file")?;
 
         let config: Self = toml::from_str(&content)
-            .context("解析配置文件失败")?;
+            .context("failed to parse config file")?;
 
         Ok(config)
     }
@@ -218,13 +219,13 @@ impl AppConfig {
     pub fn save(&self) -> anyhow::Result<()> {
         let path = crate::paths::config_path()?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).context("创建配置目录失败")?;
+            std::fs::create_dir_all(parent).context("failed to create config directory")?;
         }
         let content = toml::to_string_pretty(self)
-            .context("序列化配置失败")?;
+            .context("failed to serialize config")?;
 
         std::fs::write(&path, content)
-            .context("写入配置文件失败")?;
+            .context("failed to write config file")?;
 
         Ok(())
     }

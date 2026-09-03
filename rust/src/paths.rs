@@ -37,7 +37,7 @@ pub fn portable_config_path() -> Option<PathBuf> {
 pub fn ensure_app_dirs() -> Result<PathBuf> {
     let app = app_dir()?;
     let temp = app.join("temp");
-    std::fs::create_dir_all(&temp).context("创建应用数据目录失败")?;
+    std::fs::create_dir_all(&temp).context("failed to create app data directory")?;
     restrict_directory_acl(&app);
     Ok(temp)
 }
@@ -49,7 +49,7 @@ pub fn restrict_directory_acl(dir: &Path) {
     let user = match std::env::var("USERNAME") {
         Ok(u) if !u.is_empty() => u,
         _ => {
-            warn!("无法读取 USERNAME，跳过目录 ACL 收紧");
+            warn!("USERNAME is unavailable, skipping directory ACL tighten");
             return;
         }
     };
@@ -74,9 +74,9 @@ pub fn restrict_directory_acl(dir: &Path) {
         .status();
 
     match status {
-        Ok(s) if s.success() => info!("已收紧目录 ACL: {}", dir.display()),
-        Ok(s) => warn!("icacls 失败 (status={s})，目录 {}", dir.display()),
-        Err(e) => warn!("无法运行 icacls: {e}"),
+        Ok(s) if s.success() => info!("tightened directory ACL: {}", dir.display()),
+        Ok(s) => warn!("icacls failed (status={s}) for {}", dir.display()),
+        Err(e) => warn!("could not run icacls: {e}"),
     }
 }
 

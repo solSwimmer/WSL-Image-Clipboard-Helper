@@ -2,14 +2,16 @@ use anyhow::Context;
 use std::path::Path;
 use tracing::info;
 
-/// 确保 PNG 数据已落盘。
+/// Ensure PNG bytes are on disk.
 ///
-/// 必须在粘贴路径**之前**调用：CLI Agent（Claude Code / Codex 等）收到粘贴文本的
-/// 瞬间会检查该路径文件是否存在，存在才会把它渲染成 `[Image #n]` 附件；
-/// 旧版“先粘路径、后台再写文件”的顺序在系统卡顿时会让文件晚于检查落盘，
-/// 表现为输入框里留下原始 `/mnt/...` 路径（issue #4）。
+/// Must run **before** the path is pasted: CLI agents (Claude Code / Codex / etc.)
+/// check whether the file exists the instant they receive the pasted text, and only
+/// then render it as an `[Image #n]` attachment. The old "paste the path first,
+/// write the file in the background" order could leave a raw `/mnt/...` path in
+/// the input box when the system was slow (issue #4).
 ///
-/// 剪贴板未变化的重复粘贴（缓存命中）文件已存在，直接跳过重写。
+/// Repeat pastes with an unchanged clipboard (cache hit) skip the rewrite if the
+/// file already exists.
 pub async fn ensure_saved(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
         return Ok(());
@@ -18,17 +20,17 @@ pub async fn ensure_saved(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .context("创建临时目录失败")?;
+            .context("failed to create temp directory")?;
     }
 
     let tmp_path = path.with_extension("png.partial");
     tokio::fs::write(&tmp_path, data)
         .await
-        .context("写入图片文件失败")?;
+        .context("failed to write image file")?;
     tokio::fs::rename(&tmp_path, path)
         .await
-        .context("提交图片文件失败")?;
+        .context("failed to commit image file")?;
 
-    info!("图片已保存: {}", path.display());
+    info!("image saved: {}", path.display());
     Ok(())
 }
