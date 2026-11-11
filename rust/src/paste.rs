@@ -11,7 +11,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VK_CONTROL, VK_ESCAPE, VK_LMENU, VK_MENU, VK_RMENU, VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO,
+    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO,
     GUI_INMENUMODE,
 };
 
@@ -339,21 +339,48 @@ pub fn release_all_modifiers() {
     }
 }
 
-/// 发送 Ctrl+V 粘贴快捷键（使用 SendInput 替代 keybd_event）
+/// Windows Terminal 顶层窗口类名
+const WINDOWS_TERMINAL_CLASS: &str = "CASCADIA_HOSTING_WINDOW_CLASS";
+
+/// 前台窗口是否是 Windows Terminal。
+/// 在 WSL 终端里 Ctrl+V 常被用户改绑或交给 TUI 应用处理，
+/// 而 Ctrl+Shift+V 是终端的固定"粘贴"快捷键，注入它才能稳定地把路径贴进输入框。
+fn foreground_is_windows_terminal() -> bool {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0 == 0 {
+            return false;
+        }
+        let mut buf = [0u16; 64];
+        let len = GetClassNameW(hwnd, &mut buf);
+        if len <= 0 {
+            return false;
+        }
+        String::from_utf16_lossy(&buf[..len as usize]) == WINDOWS_TERMINAL_CLASS
+    }
+}
+
+/// 发送粘贴快捷键（使用 SendInput 替代 keybd_event）。
+/// Windows Terminal 用 Ctrl+Shift+V，其他窗口用 Ctrl+V。
 pub fn send_ctrl_v() -> Result<()> {
     // 先给用户留出松开热键的时间（Alt+V/Alt+Enter 的 Alt 尚未抬起时，
     // 注入的 Ctrl+V 会被识别成 Ctrl+Alt+V 而失效）
     wait_modifiers_released(250);
+    let use_shift = foreground_is_windows_terminal();
     release_all_modifiers();
     // Alt 已被松开且菜单栏被激活时，Ctrl+V 会发进菜单而不是输入框
     dismiss_menu_mode_if_active();
 
-    let inputs = [
-        make_key_input(VK_CONTROL, false), // Ctrl down
-        make_key_input(VK_V, false),       // V down
-        make_key_input(VK_V, true),        // V up
-        make_key_input(VK_CONTROL, true),  // Ctrl up
-    ];
+    let mut inputs = vec![make_key_input(VK_CONTROL, false)];
+    if use_shift {
+        inputs.push(make_key_input(VK_SHIFT, false));
+    }
+    inputs.push(make_key_input(VK_V, false));
+    inputs.push(make_key_input(VK_V, true));
+    if use_shift {
+        inputs.push(make_key_input(VK_SHIFT, true));
+    }
+    inputs.push(make_key_input(VK_CONTROL, true));
 
     unsafe {
         let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
