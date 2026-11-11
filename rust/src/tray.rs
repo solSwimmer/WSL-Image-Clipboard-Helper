@@ -90,8 +90,8 @@ impl TrayController {
 }
 
 unsafe fn load_app_icon(h_instance: HINSTANCE) -> windows::core::Result<HICON> {
-    LoadIconW(h_instance, PCWSTR(APP_ICON_ID as usize as *const u16))
-        .or_else(|_| LoadIconW(HINSTANCE::default(), IDI_APPLICATION))
+    LoadIconW(Some(h_instance), PCWSTR(APP_ICON_ID as usize as *const u16))
+        .or_else(|_| LoadIconW(None, IDI_APPLICATION))
 }
 
 /// 托盘线程主函数
@@ -129,13 +129,10 @@ fn run_tray_thread(
             0, 0, 0, 0,
             None,
             None,
-            h_instance,
+            Some(h_instance.into()),
             None,
-        );
-
-        if hwnd.0 == 0 {
-            anyhow::bail!("创建隐藏窗口失败");
-        }
+        )
+        .context("创建隐藏窗口失败")?;
 
         // 创建托盘图标
         let mut nid = NOTIFYICONDATAW::default();
@@ -149,7 +146,7 @@ fn run_tray_thread(
         // 设置 tooltip
         set_tooltip(&mut nid, &config);
 
-        Shell_NotifyIconW(NIM_ADD, &nid);
+        let _ = Shell_NotifyIconW(NIM_ADD, &nid);
 
         // 在托盘线程上创建热键管理器
         let mut hotkey_manager = HotkeyManager::new()?;
@@ -176,11 +173,11 @@ fn run_tray_thread(
         // 消息循环
         let mut msg = MSG::default();
         loop {
-            let ret = GetMessageW(&mut msg, HWND::default(), 0, 0);
+            let ret = GetMessageW(&mut msg, None, 0, 0);
             if ret.0 <= 0 {
                 break;
             }
-            TranslateMessage(&msg);
+            let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
 
@@ -188,9 +185,9 @@ fn run_tray_thread(
         if let Err(e) = state.hotkey_manager.unregister() {
             warn!("退出时注销热键失败: {}", e);
         }
-        Shell_NotifyIconW(NIM_DELETE, &state.nid);
+        let _ = Shell_NotifyIconW(NIM_DELETE, &state.nid);
         let _ = DestroyWindow(hwnd);
-        let _ = UnregisterClassW(class_name, h_instance);
+        let _ = UnregisterClassW(class_name, Some(h_instance.into()));
         TRAY_STATE = std::ptr::null_mut();
 
         info!("托盘线程已退出");
@@ -412,7 +409,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
 
-    TrackPopupMenu(h_menu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
+    let _ = TrackPopupMenu(h_menu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, Some(0), hwnd, None);
 
     let _ = DestroyMenu(h_menu);
 }
@@ -466,7 +463,7 @@ unsafe fn switch_hotkey(state: &mut TrayState, hotkey_type: HotkeyType) {
     // 更新 tooltip
     set_tooltip(&mut state.nid, &state.config);
     state.nid.uFlags = NIF_TIP;
-    Shell_NotifyIconW(NIM_MODIFY, &state.nid);
+    let _ = Shell_NotifyIconW(NIM_MODIFY, &state.nid);
 
     let _ = state.cmd_tx.send(TrayCommand::SwitchHotkey(hotkey_type));
     info!("已切换热键: {}", hotkey_type.display_name());
@@ -519,7 +516,7 @@ unsafe fn switch_mode(state: &mut TrayState, mode: RuntimeMode) {
     // 更新 tooltip
     set_tooltip(&mut state.nid, &state.config);
     state.nid.uFlags = NIF_TIP;
-    Shell_NotifyIconW(NIM_MODIFY, &state.nid);
+    let _ = Shell_NotifyIconW(NIM_MODIFY, &state.nid);
 
     let _ = state.cmd_tx.send(TrayCommand::SwitchMode(mode));
     info!("已切换模式: {}", mode_str);

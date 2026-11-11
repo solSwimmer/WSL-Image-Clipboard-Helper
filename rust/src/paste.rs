@@ -229,7 +229,7 @@ pub fn paste_text(text: &str) -> Result<()> {
         // 设置剪贴板数据
         if SetClipboardData(
             CF_UNICODETEXT.0 as u32,
-            windows::Win32::Foundation::HANDLE(h_mem.0 as isize),
+            Some(windows::Win32::Foundation::HANDLE(h_mem.0)),
         )
         .is_err()
         {
@@ -293,7 +293,7 @@ pub fn mask_alt_tap() {
 fn dismiss_menu_mode_if_active() {
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd.0 == 0 {
+        if hwnd.0.is_null() {
             return;
         }
         let thread_id = GetWindowThreadProcessId(hwnd, None);
@@ -348,7 +348,7 @@ const WINDOWS_TERMINAL_CLASS: &str = "CASCADIA_HOSTING_WINDOW_CLASS";
 fn foreground_is_windows_terminal() -> bool {
     unsafe {
         let hwnd = GetForegroundWindow();
-        if hwnd.0 == 0 {
+        if hwnd.0.is_null() {
             return false;
         }
         let mut buf = [0u16; 64];
@@ -423,7 +423,7 @@ enum ImeRestore {
     /// 未做任何改动，无需恢复
     Nothing,
     /// 需要把键盘布局切回原值
-    Layout { hwnd: HWND, previous_hkl: HKL },
+    Layout { hwnd: isize, previous_hkl: HKL },
     /// 需要把 IME 输入状态重新打开
     OpenStatus { ime_wnd: isize },
 }
@@ -460,11 +460,11 @@ impl ImeGuard {
     fn close_ime_open_status() -> ImeRestore {
         unsafe {
             let hwnd = GetForegroundWindow();
-            if hwnd.0 == 0 {
+            if hwnd.0.is_null() {
                 return ImeRestore::Nothing;
             }
 
-            let ime_wnd = ImmGetDefaultIMEWnd(hwnd.0);
+            let ime_wnd = ImmGetDefaultIMEWnd(hwnd.0 as isize);
             if ime_wnd == 0 {
                 // 前台窗口没有关联 IME 窗口（纯英文环境常见），无需保护
                 return ImeRestore::Nothing;
@@ -497,7 +497,7 @@ impl ImeGuard {
     fn switch_to_english_layout(allow_load: bool) -> ImeRestore {
         unsafe {
             let hwnd = GetForegroundWindow();
-            if hwnd.0 == 0 {
+            if hwnd.0.is_null() {
                 return ImeRestore::Nothing;
             }
 
@@ -530,7 +530,7 @@ impl ImeGuard {
                 current_hkl, english_hkl
             );
             let _ = PostMessageW(
-                hwnd,
+                Some(hwnd),
                 WM_INPUTLANGCHANGEREQUEST,
                 WPARAM(0),
                 LPARAM(english_hkl),
@@ -538,7 +538,7 @@ impl ImeGuard {
             std::thread::sleep(std::time::Duration::from_millis(60));
 
             ImeRestore::Layout {
-                hwnd,
+                hwnd: hwnd.0 as isize,
                 previous_hkl: current_hkl,
             }
         }
@@ -557,7 +557,7 @@ impl Drop for ImeGuard {
                     std::thread::sleep(std::time::Duration::from_millis(RESTORE_DELAY_MS));
                     unsafe {
                         if let Err(e) = PostMessageW(
-                            hwnd,
+                            Some(HWND(hwnd as *mut _)),
                             WM_INPUTLANGCHANGEREQUEST,
                             WPARAM(0),
                             LPARAM(previous_hkl),

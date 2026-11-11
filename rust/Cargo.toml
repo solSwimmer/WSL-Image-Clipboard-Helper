@@ -9,7 +9,7 @@ build = "build.rs"
 [dependencies]
 # Windows 本地库 - 使用完整 features 以避免导入问题
 [target.'cfg(windows)'.dependencies]
-windows = { version = "=0.52", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
@@ -25,7 +25,7 @@ windows = { version = "=0.52", features = [
 ] }
 
 # 全局热键
-global-hotkey = "0.5"
+global-hotkey = "0.10"
 
 # 异步运行时
 tokio = { version = "1.38", features = ["full"] }
@@ -33,15 +33,15 @@ tokio = { version = "1.38", features = ["full"] }
 # 配置管理
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
-dirs = "5.0"
+dirs = "7"
 
 # 错误处理
 anyhow = "1.0.103"
-thiserror = "1.0"
+thiserror = "2"
 
 # 图片处理 (可选)
-image = { version = "0.24", optional = true }
-png = "0.17"
+image = { version = "0.25", optional = true }
+png = "0.18"
 
 # 时间处理
 chrono = "0.4"

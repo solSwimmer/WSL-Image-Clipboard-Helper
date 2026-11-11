@@ -138,7 +138,7 @@ impl ClipboardManager {
             }
 
             let paths = if let Ok(h_data) = GetClipboardData(CF_HDROP.0 as u32) {
-                Self::read_hdrop_paths(HDROP(h_data.0 as isize))
+                Self::read_hdrop_paths(HDROP(h_data.0))
             } else {
                 Vec::new()
             };
