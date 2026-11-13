@@ -13,298 +13,12 @@
 <p align="center">
   <a href="#english-guide">English</a>
   ·
-  <a href="#中文说明">中文</a>
-  ·
   <a href="SECURITY.md">Security</a>
 </p>
 
 <p align="center">
   Security-hardened fork of <a href="https://github.com/cpulxb/WSL-Image-Clipboard-Helper">cpulxb/WSL-Image-Clipboard-Helper</a>. Build from source; this tree does not ship <code>.exe</code> files.
 </p>
-
----
-
-## 中文说明 🇨🇳
-
-### 📌 概述
-
-#### 🌍 背景
-当前许多智能编程 CLI Agent（如 Codex、Amazon Q Developer CLI、OpenCode、Claude Code 等）主要针对 Linux 和 macOS 系统优化，Windows 用户想要体验这些工具，通常需要通过 WSL2（Windows Subsystem for Linux 2）来运行。然而，WSL2 在某些能力上的支持并不完善，图片粘贴就是其中一个典型痛点：
-
-- 问题：WSL2 终端无法直接访问 Windows 剪贴板中的图片数据
-- 影响：用户无法像在原生 Linux/macOS 中那样，直接把截图粘贴给 AI 工具分析
-- 现状：部分 AI CLI 工具通过“保存图片到文件 -> 传递文件路径”的方式变相支持图片输入
-
-#### ✅ 解决方案
-本工具用于弥补这个缺口：通过全局快捷键（默认 `Alt+V`），自动读取 Windows 剪贴板图片，保存到 `%LOCALAPPDATA%\WSLImageClipboardHelper\temp`，并把对应 WSL 路径（`/mnt/c/...`）粘贴到当前输入窗口，让 AI 工具可以直接消费图片文件。
-
-当前主版本是 Rust 实现（`v4.2`）。**请自行从源码编译**，不要运行 git 仓库或来路不明压缩包里的 `.exe`。
-
-> 这是一个输入代理：它会注册全局热键、读取剪贴板、向当前窗口注入 `Ctrl+V`。许多 AI CLI 在路径对应的文件已存在时会**跳过读文件授权**，直接把图片当附件。不要对密码管理器截图、`.env`、密钥文件按这个热键。详见 [SECURITY.md](SECURITY.md)。
-
-### ✨ 核心特性
-
-- 🚀 即时路径输出：触发热键后优先粘贴 `/mnt/...` 路径，减少等待时间
-- ⚡ 图片异步保存：路径先可用，图片文件后台写入，降低主流程阻塞
-- 🌐 输入法保护（兼容模式）：粘贴前把前台窗口切到直接输入英文，结束后自动恢复；默认不改动系统键盘布局，可在托盘彻底关闭
-- 🧹 自动清理机制：周期清理过期 PNG，退出时清理临时图片
-- 🖱️ 托盘管理：支持切换热键、切换运行模式、打开临时图片目录、退出并清理临时图片
-- 🛡️ 图片读取边界保护：对 DIB 头与内存大小做安全校验，避免异常数据导致崩溃
-- 🪟 Windows 集成：内嵌多尺寸图标，并带 DPI-aware manifest，高 DPI 环境显示更稳定
-- 📁 Explorer 路径转换：默认**只转换图片文件**；非图片（`.env` / 密钥等）会被忽略，可在托盘打开 `允许转换非图片文件`
-- 🎯 路径格式可切换：纯路径 / `@` 前缀（适配 Kimi Code CLI、Gemini CLI、Qwen Code）/ 引号包裹
-
-![clip_20260217_184919_809](./img/clip_20260217_184919_809.png)
-
-以这张图为例子，粘贴到Codex,Claude Code,OpenCode均正常(其他Agent工具可自行尝试)，粘贴的时候会自动识别成`[Image #n]` 的这种格式，不能转换成这个格式的时候，就会以路径的形式显示在输入框中
-
-`codex`
-
-![image-20260217185539242](./img/image-20260217185539242.png)
-
-`claude`
-
-![image-20260217185656617](./img/Snipaste_2026-02-17_18-56-35.jpg)
-
-`openCode`
-
-![image-20260217185731979](./img/image-20260217185731979.png)
-
-### 🧰 必备环境
-
-- Windows 10/11，已启用 WSL2
-- PowerShell 5.1 及以上
-- Rust 工具链（自行编译所必需）
-- AutoHotkey v2（已弃用，不要再编译 AHK 版）
-
-### 🗂️ 目录结构
-
-```text
-WSL-Image-Clipboard-Helper/
-├── README.md
-├── LICENSE
-├── SECURITY.md
-├── docs/
-├── rust/                    # 唯一支持的实现
-│   ├── Cargo.toml
-│   ├── Cargo.lock
-│   └── src/
-└── scripts/                 # 已弃用的 AHK / PowerShell（见 scripts/DEPRECATED.md）
-```
-
-### 🚀 使用方式（Rust 版本）
-
-1. 克隆本仓库并编译（推荐，也是唯一受支持的安装方式）：
-
-   ```bash
-   git clone git@github.com:solSwimmer/WSL-Image-Clipboard-Helper.git
-   cd WSL-Image-Clipboard-Helper/rust
-   cargo build --release --target x86_64-pc-windows-msvc
-   ```
-
-   产物：`rust/target/x86_64-pc-windows-msvc/release/wsl_clipboard.exe`
-
-2. 把编译出的 `wsl_clipboard.exe` 放到一个**固定、非项目**目录后双击启动。不要放进 git 仓库。
-
-   运行时文件在 `%LOCALAPPDATA%\WSLImageClipboardHelper\`（配置 `wsl_clipboard.toml` 与 `temp\` 图片）。该目录会收紧 ACL，只给当前用户和 SYSTEM。
-
-3. 在任意可编辑输入框按下快捷键（默认 `Alt+V`）：
-   - 有图片：保存到 `%LOCALAPPDATA%\WSLImageClipboardHelper\temp`，并粘贴 `/mnt/...` 路径
-   - 无图片：自动回退普通粘贴（`Ctrl+V`）
-   - 在 Explorer 中先复制**图片文件**，再按 `Alt+V`：粘贴转换后的 WSL 路径。非图片默认忽略。
-
-4. 通过托盘菜单切换热键、运行模式、是否允许非图片文件。
-
-5. 退出时从托盘菜单选择 `退出并清理临时图片`。
-
-### 🧹 卸载
-
-1. 托盘图标右键 → `退出并清理临时图片`（结束进程并删除临时 PNG）。
-2. 删除启动项（若你加过）：`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\wsl_clipboard.bat`
-3. 删除可执行文件所在目录。
-4. 删除 `%LOCALAPPDATA%\WSLImageClipboardHelper`
-5. 若旧版曾往系统里塞了 `ENG` 键盘布局：`设置 → 时间和语言 → 语言和区域` 里手动删一次。
-
-### ⚠️ 常见注意事项
-
-- 默认热键是 `Alt+V`，可在托盘菜单中切换为 `Ctrl+Alt+V` 或 `Alt+Enter`
-- 运行配置保存在 `%LOCALAPPDATA%\WSLImageClipboardHelper\wsl_clipboard.toml`
-- 托盘菜单中的 `退出并清理临时图片` 会删除该目录 `temp/` 下的临时 PNG 文件（超过 30 分钟的 PNG 也会被周期清理）
-- **不要以管理员身份运行本工具。** UIPI 拦住注入按键是正常保护；提权后它可以向任何提权窗口打字。
-- 若遇到输入法导致的粘贴错乱，切回 `兼容模式（输入法保护）`
-- 不希望本工具碰输入法，可在托盘 `输入法保护` 中选择 `关闭（不干预输入法）`
-- 若托盘图标未显示，请检查任务栏隐藏图标区域
-- 默认粘贴纯路径；Kimi 等需要 `@` 文件引用的 CLI，请在托盘菜单切换 `路径格式`
-
-### ⌨️ 输入法保护策略
-
-仅在 `运行模式 = 兼容模式` 时生效，可在托盘 `输入法保护` 子菜单切换，或直接改 `wsl_clipboard.toml` 的 `ime_protection`：
-
-| 取值 | 行为 | 是否会改动系统输入法列表 |
-| --- | --- | --- |
-| `off` | 完全不干预输入法 | 否 |
-| `imm`（默认） | 仅关闭前台窗口的 IME 输入状态（切到直接输入），粘贴后恢复 | 否 |
-| `layout` | 切换到英文键盘布局，但**只复用**系统里已安装的英文布局；没有就跳过 | 否 |
-| `layout-force` | 找不到英文布局时才加载 `ENG`（不激活），并在退出时自动卸载 | 仅此项可能临时新增 |
-
-> 自 v4.1.3 起，程序**不再于启动时预加载英文键盘布局**。旧版本会在启动瞬间无条件调用
-> `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)`，把英文布局登记进系统输入法列表，
-> 导致 `Win + Space` 里凭空多出 `ENG / English (United States)`（[issue #10](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/10)）。
-
-### ❓ 常见问题（FAQ）
-
-**Q1：为什么有时显示 `[Image #1]`，有时却直接显示 `/mnt/...` 路径？**（[issue #4](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/4)）
-
-CLI Agent（Claude Code / Codex / OpenCode 等）收到粘贴文本的瞬间会检查该路径的文件是否已存在：存在就渲染成 `[Image #n]` 并直接作为图片附件（无需申请读取权限）；不存在或识别失败就原样留下路径文本，之后 Agent 只能用读文件工具去访问（触发权限申请；若 Agent 跑在 Windows 原生环境而非 WSL，还可能因不认识 `/mnt/c/...` 而再转换一次 Windows 路径，出现"二次申请"）。
-
-v4.0 及更早版本采用"先粘路径、后台再保存图片"的顺序，系统卡顿时文件落盘晚于 CLI 的检查，就会偶发直接显示路径。v4.1 起改为"先落盘、再粘贴"，从根本上消除该竞态。若仍偶发，请确认终端支持 bracketed paste（Windows Terminal 默认支持），并且 Agent 运行在 WSL 内。
-
-**Q2：按了热键，图片保存了、输入法也切换了，但哪里都粘不出文本？**（[issue #2](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/2)）
-
-按可能性从高到低排查：
-
-1. **在用 v3.0 AHK 版本（或自行改编译的版本）**：旧版粘贴后固定 80ms 就把剪贴板恢复成原图片，目标窗口响应稍慢时读到的已是恢复后的图片数据，表现为"任何地方都粘不出文本"。请升级到 v4.x Rust 版本（已移除该竞态）。
-2. **目标窗口以管理员权限运行**（如管理员终端），而本工具未提权：Windows UIPI 会静默拦截模拟按键。**不要把本工具提权**；改在非提权终端里使用，或接受无法往提权窗口粘贴。
-3. **热键修饰键未松开**：Alt 未抬起时注入的 Ctrl+V 会被识别成 Ctrl+Alt+V 而失效。v4.1 增加了物理按键释放等待与 Alt 菜单屏蔽键，已大幅缓解。
-4. **安全软件拦截模拟键盘输入**（SendInput）：这是预期行为。不要为了本工具关闭 AV；如需放行，只允许这一个你自己编译的 exe。
-
-**Q3：Kimi Code CLI 里粘贴路径没有变成图片？**（[issue #5](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/5)）
-
-Kimi Code CLI 不会把纯文本路径自动识别为图片，但支持 `@文件` 引用语法。在托盘菜单把 `路径格式` 切换为 `@ 路径（Kimi/Gemini/Qwen）`，热键会粘贴 `@/mnt/c/... `（带尾随空格），Kimi Code CLI / Gemini CLI / Qwen Code 即可把它作为文件引用消费。
-
-另外注意：Kimi Code CLI 在 Windows 端自带 `Alt+V` 贴图快捷键，与本工具默认热键相同。本工具注册的是系统级全局热键、会优先生效；若想保留 Kimi 原生行为，可在托盘把本工具热键换成 `Ctrl+Alt+V`。
-
-**Q4：路径里有空格，粘贴后被命令行截断？**
-
-把 `路径格式` 切换为 `引号路径`，粘贴时会用双引号包裹每个路径。
-
-**Q5：启动本工具后，`Win + Space` 里多出了 `ENG / English (United States)`？**（[issue #10](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/10)）
-
-v4.1.2 及更早版本在启动时就无条件执行 `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)` 预加载英文布局。`LoadKeyboardLayoutW` 会把该布局登记进**系统**的输入法列表，`KLF_ACTIVATE` 还会立即激活它，于是即使你的语言列表里从没添加过英语，工具一启动就会多出 `ENG`，任务栏输入法图标也被重新唤出。
-
-v4.1.3 起：
-
-- 启动阶段不再做任何键盘布局操作
-- 英文布局改为**惰性解析**，且默认只在系统已装的布局里复用，绝不擅自新增
-- 默认策略换成 `imm`：只关闭前台窗口的 IME 输入状态，完全不触碰键盘布局
-- 确需加载时（`ime_protection = "layout-force"`）不再使用 `KLF_ACTIVATE`，并改用 `KLF_NOTELLSHELL` 避免唤出任务栏指示器，退出时自动 `UnloadKeyboardLayout`
-- 新增 `ime_protection = "off"`，可彻底关闭输入法保护
-
-如果你此前被旧版本影响，系统语言列表里已经留下了英语（美国），需要到 `设置 → 时间和语言 → 语言和区域` 手动删除一次；新版本不会再添加它。
-
-### 🛠️ Rust 版本编译（推荐）
-
-在仓库根目录执行：
-
-```bash
-cd rust
-cargo build --release --target x86_64-pc-windows-msvc
-```
-
-编译产物：
-
-```text
-rust/target/x86_64-pc-windows-msvc/release/wsl_clipboard.exe
-```
-
-调试构建：
-
-```bash
-cd rust
-cargo build --target x86_64-pc-windows-msvc
-```
-
-清理构建产物：
-
-```bash
-cd rust
-cargo clean
-```
-
-在非 Windows 宿主（Linux/macOS）上执行 `cargo check` / `cargo clippy` 前，需先安装交叉编译 target（`rust/.cargo/config.toml` 默认指向 `x86_64-pc-windows-msvc`）：
-
-```bash
-rustup target add x86_64-pc-windows-msvc
-```
-
-### 🔧 AHK 编译（仅维护 V3.0 时需要）
-
-如果你在维护 `v3.0` 的 AHK 分支，可用 Ahk2Exe 重新编译：
-
-1. 安装 AutoHotkey v2：  
-   [https://www.autohotkey.com/download/ahk-v2.exe](https://www.autohotkey.com/download/ahk-v2.exe)
-2. 打开 `C:\Program Files\AutoHotkey\Compiler\Ahk2Exe.exe`
-3. Source 选择 `scripts/wsl_clipboard.ahk`
-4. Destination 选择输出路径（例如 `scripts/wsl_clipboard.exe`）
-5. Base File 建议使用 `AutoHotkey64.exe`
-
-### 📚 附加文档
-
-- [技术架构与流程说明](docs/architecture_by_codex.md)
-- [V3.0/V4.0 重构说明](docs/rust-refactor-v3-v4.md)
-- [v4.1 终端图片粘贴场景实测报告](docs/paste-scenario-test-report.md)
-
-### 🕒 版本历史
-
-#### v4.2.0（当前版本，本 fork，Rust） ✅
-
-- 仓库不再包含预编译 `.exe` / AutoHotkey 运行时
-- 临时图片与配置改到 `%LOCALAPPDATA%\WSLImageClipboardHelper`，并收紧 ACL
-- 临时 PNG 保留时间从 2 小时改为 30 分钟
-- Explorer 文件转换默认仅图片扩展名，避免把密钥文件喂给 Agent
-- 粘贴路径过滤控制字符 / `` ` `` / `$`；引号风格转义内部引号
-- manifest 声明 `asInvoker`，不再建议以管理员运行
-- Release 工作流只对 `v*` 标签发布，禁止分支推送覆盖资产
-- AHK / PowerShell 路径标为弃用，并限制写入/删除范围
-
-#### v4.1.3（上游，Rust） ✅
-
-- 修复启动后系统输入法列表凭空多出 `ENG / English (United States)` 的问题：不再于启动时无条件调用 `LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)`（#10）
-- 英文布局改为惰性解析，默认只复用系统已装布局；确需加载时不再使用 `KLF_ACTIVATE`，并在退出时自动卸载
-- 新增 `输入法保护` 托盘选项与 `ime_protection` 配置项：`off` / `imm`（新默认，零副作用）/ `layout` / `layout-force`
-- 与前台窗口 IME 的通信改用带超时的 `SendMessageTimeoutW`，避免无响应窗口拖住粘贴路径
-
-#### v4.1.2（Rust） ✅
-
-- 修复快速松开 Alt 时粘贴被目标窗口菜单栏吃掉的问题：热键触发后立即注入屏蔽键，若前台已进入菜单模式则先发 Esc 退出再粘贴（#2）
-
-#### v4.1.1（Rust） ✅
-
-- 修复 32 位剪贴板 DIB 的保留字节（全 0）被当作 alpha 导致保存的 PNG 全透明的问题：alpha 全 0 时按不透明处理（与浏览器对剪贴板 DIB 的启发式一致）
-
-#### v4.1（Rust） ✅
-
-- 修复偶发"粘贴出原始路径而非 `[Image #n]`"：改为图片先落盘、路径后粘贴，消除文件存在性竞态（#4）
-- 新增 `路径格式` 托盘选项：纯路径 / `@` 前缀 / 引号包裹，适配 Kimi Code CLI、Gemini CLI、Qwen Code 等（#5）
-- 粘贴按键注入加固：等待物理修饰键释放、增加 Alt 菜单屏蔽键并释放右 Alt，降低"粘贴无内容"概率（#2）
-- 支持在非 Windows 宿主上执行 `cargo check`/`cargo clippy`（自动跳过资源嵌入）
-- README 新增 FAQ 排障章节
-
-#### v4.0（Rust） ✅
-
-- 主流程迁移到 Rust，可维护性更高
-- 修复 DIB 像素偏移解析问题，提升图片兼容性
-- 增加剪贴板内存边界校验，避免越界读取风险
-- 热键切换加入回滚机制，避免切换失败后无热键可用
-- 异常分支补齐剪贴板释放，降低资源占用风险
-- 内嵌多尺寸应用图标，并增加 DPI-aware manifest
-- 支持 Explorer 复制文件后用 `Alt+V` 转换并粘贴 `/mnt/...` 路径
-
-#### v3.0（HotKey 改版，AHK） 🔁
-
-- 仍基于 AHK 体系
-- 重点优化热键体验与可配置性
-- 托盘交互进一步完善
-
-#### v2.0（AHK 性能优化版） ⚡
-
-- 路径优先异步保存，体感延迟明显下降
-- 引入输入法保护和自动清理机制
-
-#### v1.0 🧱
-
-- 基础剪贴板图片同步能力
-- SHA256 去重与缓存管理
 
 ---
 
@@ -335,7 +49,7 @@ Current mainline is Rust (`v4.2`). **Build from source.** This fork does not shi
 - 🧹 Automatic cleanup for temporary PNG files
 - 🛡️ Safer clipboard parsing with memory-bound checks
 - 🪟 Embedded multi-size app icons and a DPI-aware manifest
-- 📁 Explorer file path conversion: **image files only** by default; non-images are ignored unless you enable `允许转换非图片文件` in the tray
+- 📁 Explorer file path conversion: **image files only** by default; non-images are ignored unless you enable `Allow non-image files` in the tray
 - 🎯 Switchable path style: plain / `@`-prefixed (for Kimi Code CLI, Gemini CLI, Qwen Code) / quoted
 
 ![clip_20260217_184919_809](./img/clip_20260217_184919_809.png)
@@ -411,13 +125,13 @@ WSL-Image-Clipboard-Helper/
 - `Exit and clean temporary images` removes PNGs under that `temp/` folder (PNGs older than 30 minutes are also cleaned periodically).
 - **Do not run this helper as Administrator.** UIPI blocking injected keys is a protection, not a bug.
 - If IME state causes paste issues, switch back to `Compatibility mode (IME guard)`.
-- To stop the helper from touching your IME at all, pick `关闭（不干预输入法）` under the tray `输入法保护` (IME guard) submenu.
+- To stop the helper from touching your IME at all, pick `Off (do not touch the IME)` under the tray `IME guard` submenu.
 - If the tray icon is not visible, check the hidden icons area in the Windows taskbar.
-- Plain paths are pasted by default; for CLIs that need `@` file references (e.g. Kimi Code CLI), switch `路径格式` (path style) in the tray menu.
+- Plain paths are pasted by default; for CLIs that need `@` file references (e.g. Kimi Code CLI), switch `Path style` in the tray menu.
 
 ### ⌨️ IME guard strategies
 
-Effective only in compatibility mode. Switch it in the tray `输入法保护` submenu, or set `ime_protection` in `wsl_clipboard.toml`:
+Effective only in compatibility mode. Switch it in the tray `IME guard` submenu, or set `ime_protection` in `wsl_clipboard.toml`:
 
 | Value | Behaviour | Touches the system IME list? |
 | --- | --- | --- |
@@ -438,7 +152,7 @@ Most likely causes, in order: (1) you are on the v3.0 AHK build, which restored 
 
 **Q3: Kimi Code CLI does not turn the pasted path into an image.** ([issue #5](https://github.com/cpulxb/WSL-Image-Clipboard-Helper/issues/5))
 
-Kimi Code CLI does not auto-detect plain path text, but it supports `@file` references. Switch the tray `路径格式` (path style) to the `@` option and the hotkey pastes `@/mnt/c/... ` (with a trailing space), which Kimi Code CLI / Gemini CLI / Qwen Code consume as a file reference. Note Kimi's own Windows build binds `Alt+V` for clipboard images; this helper's global hotkey takes priority, so switch one of them (e.g. this helper to `Ctrl+Alt+V`) if you want both behaviors.
+Kimi Code CLI does not auto-detect plain path text, but it supports `@file` references. Switch the tray `Path style` to the `@` option and the hotkey pastes `@/mnt/c/... ` (with a trailing space), which Kimi Code CLI / Gemini CLI / Qwen Code consume as a file reference. Note Kimi's own Windows build binds `Alt+V` for clipboard images; this helper's global hotkey takes priority, so switch one of them (e.g. this helper to `Ctrl+Alt+V`) if you want both behaviors.
 
 **Q4: Paths containing spaces get cut off in the shell.**
 

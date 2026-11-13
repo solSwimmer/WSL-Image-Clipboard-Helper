@@ -14,11 +14,11 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// 托盘图标回调消息
+/// Tray icon callback message
 const WM_TRAYICON: u32 = WM_APP + 100;
 const APP_ICON_ID: u16 = 1;
 
-/// 菜单命令 ID
+/// Menu command IDs
 const CMD_HOTKEY_ALTV: u32 = 1001;
 const CMD_HOTKEY_CTRLALTV: u32 = 1002;
 const CMD_HOTKEY_ALTENTER: u32 = 1003;
@@ -35,7 +35,7 @@ const CMD_IME_LAYOUT: u32 = 6003;
 const CMD_IME_LAYOUT_FORCE: u32 = 6004;
 const CMD_ALLOW_NON_IMAGE: u32 = 7001;
 
-/// 托盘发往主循环的命令
+/// Commands the tray sends to the main loop
 #[derive(Debug, Clone)]
 pub enum TrayCommand {
     SwitchHotkey(HotkeyType),
@@ -47,7 +47,7 @@ pub enum TrayCommand {
     Exit,
 }
 
-/// 线程局部存储：用于在 wnd_proc 中访问状态
+/// Thread-local storage: used to reach state from wnd_proc
 struct TrayState {
     nid: NOTIFYICONDATAW,
     config: AppConfig,
@@ -57,15 +57,15 @@ struct TrayState {
     session_end_cleanup_done: bool,
 }
 
-// 全局状态指针（仅托盘线程访问）
+// Global state pointer (tray thread only)
 static mut TRAY_STATE: *mut TrayState = std::ptr::null_mut();
 
-/// 托盘控制器
+/// Tray controller
 pub struct TrayController;
 
 impl TrayController {
-    /// 启动托盘线程，返回命令接收端和一个 join handle
-    /// 热键管理器在托盘线程上创建（需要 Win32 消息循环）
+    /// Start the tray thread; returns the command receiver and a join handle
+    /// The hotkey manager is created on the tray thread (it needs a Win32 message loop)
     pub fn start(
         config: AppConfig,
         temp_dir: PathBuf,
@@ -80,10 +80,10 @@ impl TrayController {
             .name("tray-thread".to_string())
             .spawn(move || {
                 if let Err(e) = run_tray_thread(config_clone, temp_dir_clone, tx) {
-                    error!("托盘线程异常退出: {}", e);
+                    error!("Tray thread exited abnormally: {}", e);
                 }
             })
-            .context("启动托盘线程失败")?;
+            .context("Failed to start tray thread")?;
 
         Ok(cmd_rx)
     }
@@ -94,7 +94,7 @@ unsafe fn load_app_icon(h_instance: HINSTANCE) -> windows::core::Result<HICON> {
         .or_else(|_| LoadIconW(None, IDI_APPLICATION))
 }
 
-/// 托盘线程主函数
+/// Tray thread entry point
 fn run_tray_thread(
     config: AppConfig,
     temp_dir: PathBuf,
@@ -103,7 +103,7 @@ fn run_tray_thread(
     unsafe {
         let h_instance = GetModuleHandleW(None)?;
 
-        // 注册窗口类
+        // Register the window class
         let class_name_buf: Vec<u16> = "WSLClipboardTray\0".encode_utf16().collect();
         let class_name = PCWSTR::from_raw(class_name_buf.as_ptr());
 
@@ -120,7 +120,7 @@ fn run_tray_thread(
 
         let window_name_buf: Vec<u16> = "WSL Clipboard Tray\0".encode_utf16().collect();
 
-        // 创建隐藏窗口
+        // Create a hidden window
         let hwnd = CreateWindowExW(
             Default::default(),
             class_name,
@@ -132,9 +132,9 @@ fn run_tray_thread(
             Some(h_instance.into()),
             None,
         )
-        .context("创建隐藏窗口失败")?;
+        .context("Failed to create hidden window")?;
 
-        // 创建托盘图标
+        // Create the tray icon
         let mut nid = NOTIFYICONDATAW::default();
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = hwnd;
@@ -143,22 +143,22 @@ fn run_tray_thread(
         nid.uCallbackMessage = WM_TRAYICON;
         nid.hIcon = load_app_icon(h_instance.into())?;
 
-        // 设置 tooltip
+        // Set the tooltip
         set_tooltip(&mut nid, &config);
 
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
 
-        // 在托盘线程上创建热键管理器
+        // Create the hotkey manager on the tray thread
         let mut hotkey_manager = HotkeyManager::new()?;
 
-        // 注册初始热键
+        // Register the initial hotkey
         let initial_hotkey = HotkeyType::from_config(&config.hotkey)
             .unwrap_or(HotkeyType::AltV);
         if let Err(e) = hotkey_manager.register(initial_hotkey) {
-            warn!("注册初始热键失败: {}", e);
+            warn!("Failed to register the initial hotkey: {}", e);
         }
 
-        // 创建状态
+        // Create state
         let mut state = Box::new(TrayState {
             nid,
             config,
@@ -170,7 +170,7 @@ fn run_tray_thread(
 
         TRAY_STATE = &mut *state as *mut TrayState;
 
-        // 消息循环
+        // Message loop
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
@@ -181,30 +181,30 @@ fn run_tray_thread(
             DispatchMessageW(&msg);
         }
 
-        // 清理
+        // Cleanup
         if let Err(e) = state.hotkey_manager.unregister() {
-            warn!("退出时注销热键失败: {}", e);
+            warn!("Failed to unregister the hotkey on exit: {}", e);
         }
         let _ = Shell_NotifyIconW(NIM_DELETE, &state.nid);
         let _ = DestroyWindow(hwnd);
         let _ = UnregisterClassW(class_name, Some(h_instance.into()));
         TRAY_STATE = std::ptr::null_mut();
 
-        info!("托盘线程已退出");
+        info!("Tray thread exited");
     }
 
     Ok(())
 }
 
-/// 设置 tooltip 文本
+/// Set the tooltip text
 fn set_tooltip(nid: &mut NOTIFYICONDATAW, config: &AppConfig) {
     let hotkey_display = HotkeyType::from_config(&config.hotkey)
         .map(|h| h.display_name())
         .unwrap_or("Alt+V");
 
     let mode_display = match &config.runtime_mode {
-        RuntimeMode::Safe => "兼容",
-        RuntimeMode::Fast => "快速",
+        RuntimeMode::Safe => "Compatible",
+        RuntimeMode::Fast => "Fast",
     };
 
     let tip = format!("WSL Clipboard ({} | {})", hotkey_display, mode_display);
@@ -214,7 +214,7 @@ fn set_tooltip(nid: &mut NOTIFYICONDATAW, config: &AppConfig) {
     nid.szTip[len] = 0;
 }
 
-/// 窗口过程
+/// Window procedure
 unsafe extern "system" fn tray_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -260,17 +260,17 @@ unsafe fn handle_session_end() {
     }
 
     state.session_end_cleanup_done = true;
-    info!("收到 Windows 会话结束消息，开始清理临时文件");
+    info!("Received Windows session-end message, cleaning up temp files");
 
     if let Err(e) = cleanup::cleanup_temp_png(&state.temp_dir) {
-        warn!("会话结束清理临时文件失败: {}", e);
+        warn!("Failed to clean up temp files at session end: {}", e);
     }
 
     let _ = state.cmd_tx.send(TrayCommand::Exit);
     PostQuitMessage(0);
 }
 
-/// 显示右键菜单
+/// Show the right-click menu
 unsafe fn show_context_menu(hwnd: HWND) {
     if TRAY_STATE.is_null() {
         return;
@@ -282,7 +282,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         Err(_) => return,
     };
 
-    // ---- 热键子菜单 ----
+    // ---- Hotkey submenu ----
     let h_hotkey_menu = match CreatePopupMenu() {
         Ok(m) => m,
         Err(_) => { let _ = DestroyMenu(h_menu); return; }
@@ -304,10 +304,10 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(h_hotkey_menu, flags, cmd_id as usize, PCWSTR::from_raw(label_w.as_ptr()));
     }
 
-    let hotkey_label: Vec<u16> = "快捷键\0".encode_utf16().collect();
+    let hotkey_label: Vec<u16> = "Hotkey\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_POPUP, h_hotkey_menu.0 as usize, PCWSTR::from_raw(hotkey_label.as_ptr()));
 
-    // ---- 模式子菜单 ----
+    // ---- Mode submenu ----
     let h_mode_menu = match CreatePopupMenu() {
         Ok(m) => m,
         Err(_) => { let _ = DestroyMenu(h_menu); return; }
@@ -315,18 +315,18 @@ unsafe fn show_context_menu(hwnd: HWND) {
 
     let is_safe = matches!(state.config.runtime_mode, RuntimeMode::Safe);
 
-    let safe_label: Vec<u16> = "兼容模式（输入法保护）\0".encode_utf16().collect();
+    let safe_label: Vec<u16> = "Compatibility mode (IME guard)\0".encode_utf16().collect();
     let safe_flags = MF_STRING | if is_safe { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(h_mode_menu, safe_flags, CMD_MODE_SAFE as usize, PCWSTR::from_raw(safe_label.as_ptr()));
 
-    let fast_label: Vec<u16> = "快速模式（低延迟）\0".encode_utf16().collect();
+    let fast_label: Vec<u16> = "Fast mode (low latency)\0".encode_utf16().collect();
     let fast_flags = MF_STRING | if !is_safe { MF_CHECKED } else { MF_UNCHECKED };
     let _ = AppendMenuW(h_mode_menu, fast_flags, CMD_MODE_FAST as usize, PCWSTR::from_raw(fast_label.as_ptr()));
 
-    let mode_label: Vec<u16> = "运行模式\0".encode_utf16().collect();
+    let mode_label: Vec<u16> = "Mode\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_POPUP, h_mode_menu.0 as usize, PCWSTR::from_raw(mode_label.as_ptr()));
 
-    // ---- 路径格式子菜单 ----
+    // ---- Path style submenu ----
     let h_style_menu = match CreatePopupMenu() {
         Ok(m) => m,
         Err(_) => { let _ = DestroyMenu(h_menu); return; }
@@ -348,11 +348,11 @@ unsafe fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(h_style_menu, flags, cmd_id as usize, PCWSTR::from_raw(label_w.as_ptr()));
     }
 
-    let style_label: Vec<u16> = "路径格式\0".encode_utf16().collect();
+    let style_label: Vec<u16> = "Path style\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_POPUP, h_style_menu.0 as usize, PCWSTR::from_raw(style_label.as_ptr()));
 
-    // ---- 输入法保护子菜单（issue #10）----
-    // 兼容模式下具体用哪种手段保护输入法，可在这里彻底关掉
+    // ---- IME guard submenu (issue #10) ----
+    // Pick how the IME is protected in compatibility mode, or switch it off entirely here
     let h_ime_menu = match CreatePopupMenu() {
         Ok(m) => m,
         Err(_) => { let _ = DestroyMenu(h_menu); return; }
@@ -372,39 +372,39 @@ unsafe fn show_context_menu(hwnd: HWND) {
         if *policy == current_ime {
             flags |= MF_CHECKED;
         }
-        // 输入法保护只在兼容模式下生效，快速模式下置灰以免误解
+        // The IME guard only applies in compatibility mode; it is greyed out in fast mode to avoid confusion
         if !is_safe {
             flags |= MF_GRAYED;
         }
         let _ = AppendMenuW(h_ime_menu, flags, cmd_id as usize, PCWSTR::from_raw(label_w.as_ptr()));
     }
 
-    let ime_label: Vec<u16> = "输入法保护\0".encode_utf16().collect();
+    let ime_label: Vec<u16> = "IME guard\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_POPUP, h_ime_menu.0 as usize, PCWSTR::from_raw(ime_label.as_ptr()));
 
-    // ---- 非图片文件 ----
+    // ---- Non-image files ----
     let mut file_flags = MF_STRING;
     if state.config.allow_non_image_files {
         file_flags |= MF_CHECKED;
     }
-    let file_label: Vec<u16> = "允许转换非图片文件\0".encode_utf16().collect();
+    let file_label: Vec<u16> = "Allow non-image files\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, file_flags, CMD_ALLOW_NON_IMAGE as usize, PCWSTR::from_raw(file_label.as_ptr()));
 
-    // ---- 分隔线 ----
+    // ---- Separator ----
     let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-    // ---- 打开缓存 ----
-    let folder_label: Vec<u16> = "打开临时图片目录\0".encode_utf16().collect();
+    // ---- Open cache folder ----
+    let folder_label: Vec<u16> = "Open temp image folder\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_STRING, CMD_OPEN_FOLDER as usize, PCWSTR::from_raw(folder_label.as_ptr()));
 
-    // ---- 分隔线 ----
+    // ---- Separator ----
     let _ = AppendMenuW(h_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
-    // ---- 退出 ----
-    let exit_label: Vec<u16> = "退出并清理临时图片\0".encode_utf16().collect();
+    // ---- Exit ----
+    let exit_label: Vec<u16> = "Exit and clean up temp images\0".encode_utf16().collect();
     let _ = AppendMenuW(h_menu, MF_STRING, CMD_EXIT as usize, PCWSTR::from_raw(exit_label.as_ptr()));
 
-    // 显示菜单
+    // Show the menu
     let mut pt = windows::Win32::Foundation::POINT::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
@@ -414,7 +414,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
     let _ = DestroyMenu(h_menu);
 }
 
-/// 处理菜单命令
+/// Handle menu commands
 unsafe fn handle_menu_command(cmd_id: u32) {
     if TRAY_STATE.is_null() {
         return;
@@ -446,30 +446,30 @@ unsafe fn handle_menu_command(cmd_id: u32) {
     }
 }
 
-/// 切换热键
+/// Switch hotkey
 unsafe fn switch_hotkey(state: &mut TrayState, hotkey_type: HotkeyType) {
     if state.hotkey_manager.current_type() == hotkey_type {
         return;
     }
 
     if let Err(e) = state.hotkey_manager.register(hotkey_type) {
-        error!("切换热键失败: {}", e);
+        error!("Failed to switch hotkey: {}", e);
         return;
     }
 
     state.config.hotkey = hotkey_type.as_str().to_string();
     let _ = state.config.save();
 
-    // 更新 tooltip
+    // Update the tooltip
     set_tooltip(&mut state.nid, &state.config);
     state.nid.uFlags = NIF_TIP;
     let _ = Shell_NotifyIconW(NIM_MODIFY, &state.nid);
 
     let _ = state.cmd_tx.send(TrayCommand::SwitchHotkey(hotkey_type));
-    info!("已切换热键: {}", hotkey_type.display_name());
+    info!("Switched hotkey: {}", hotkey_type.display_name());
 }
 
-/// 切换路径格式
+/// Switch path style
 unsafe fn switch_path_style(state: &mut TrayState, style: PathStyle) {
     if state.config.path_style == style {
         return;
@@ -479,10 +479,10 @@ unsafe fn switch_path_style(state: &mut TrayState, style: PathStyle) {
     let _ = state.config.save();
 
     let _ = state.cmd_tx.send(TrayCommand::SwitchPathStyle(style));
-    info!("已切换路径格式: {}", style.display_name());
+    info!("Switched path style: {}", style.display_name());
 }
 
-/// 切换输入法保护策略
+/// Switch IME guard policy
 unsafe fn switch_ime_protection(state: &mut TrayState, policy: ImeProtection) {
     if state.config.ime_protection == policy {
         return;
@@ -492,10 +492,10 @@ unsafe fn switch_ime_protection(state: &mut TrayState, policy: ImeProtection) {
     let _ = state.config.save();
 
     let _ = state.cmd_tx.send(TrayCommand::SwitchImeProtection(policy));
-    info!("已切换输入法保护: {}", policy.display_name());
+    info!("Switched IME guard: {}", policy.display_name());
 }
 
-/// 切换模式
+/// Switch mode
 unsafe fn switch_mode(state: &mut TrayState, mode: RuntimeMode) {
     let mode_str = match &mode {
         RuntimeMode::Safe => "safe",
@@ -513,13 +513,13 @@ unsafe fn switch_mode(state: &mut TrayState, mode: RuntimeMode) {
     state.config.runtime_mode = mode.clone();
     let _ = state.config.save();
 
-    // 更新 tooltip
+    // Update the tooltip
     set_tooltip(&mut state.nid, &state.config);
     state.nid.uFlags = NIF_TIP;
     let _ = Shell_NotifyIconW(NIM_MODIFY, &state.nid);
 
     let _ = state.cmd_tx.send(TrayCommand::SwitchMode(mode));
-    info!("已切换模式: {}", mode_str);
+    info!("Switched mode: {}", mode_str);
 }
 
 unsafe fn toggle_allow_non_image_files(state: &mut TrayState) {
@@ -529,12 +529,12 @@ unsafe fn toggle_allow_non_image_files(state: &mut TrayState) {
         state.config.allow_non_image_files,
     ));
     info!(
-        "非图片文件路径转换: {}",
+        "Non-image file path conversion: {}",
         state.config.allow_non_image_files
     );
 }
 
-/// 打开临时文件夹
+/// Open the temp folder
 pub fn open_temp_folder() -> Result<()> {
     let temp_dir = crate::paths::temp_dir()?;
 
@@ -542,7 +542,7 @@ pub fn open_temp_folder() -> Result<()> {
         std::process::Command::new("explorer.exe")
             .arg(temp_dir.to_string_lossy().to_string())
             .spawn()
-            .context("打开文件夹失败")?;
+            .context("Failed to open folder")?;
     }
 
     Ok(())

@@ -3,8 +3,8 @@ fn main() {
         return;
     }
 
-    // 资源编译依赖 Windows 上的 rc 工具链；
-    // 非 Windows 宿主跳过图标/manifest 嵌入，保证交叉 cargo check/clippy 可用
+    // Resource compilation depends on the rc toolchain on Windows;
+    // non-Windows hosts skip embedding the icon/manifest so cross cargo check/clippy keeps working
     if std::env::var("HOST")
         .map(|h| !h.contains("windows"))
         .unwrap_or(true)

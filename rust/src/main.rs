@@ -18,7 +18,7 @@ use clipboard::ClipboardManager;
 use config::{ImeProtection, PathStyle, RuntimeMode};
 use tray::TrayCommand;
 
-/// 应用运行时状态（可被托盘命令修改）
+/// Application runtime state (modifiable via tray commands)
 struct AppState {
     runtime_mode: RuntimeMode,
     path_style: PathStyle,
@@ -33,34 +33,34 @@ async fn main() -> Result<()> {
         .init();
 
     info!(
-        "WSL Clipboard Helper v{} (Rust) 启动中...",
+        "WSL Clipboard Helper v{} (Rust) starting...",
         env!("CARGO_PKG_VERSION")
     );
 
-    // 加载配置
+    // Load configuration
     let app_config = config::AppConfig::load().unwrap_or_default();
     info!(
-        "加载配置: 热键={}, 模式={:?}, 输入法保护={}",
+        "Loaded config: hotkey={}, mode={:?}, IME guard={}",
         app_config.hotkey,
         app_config.runtime_mode,
         app_config.ime_protection.as_str()
     );
 
-    // 临时图片和配置放在 %LOCALAPPDATA%\WSLImageClipboardHelper，
-    // 不再写到可执行文件旁边（避免掉进 git 仓库或共享目录）。
+    // Temp images and config live under %LOCALAPPDATA%\WSLImageClipboardHelper,
+    // not next to the executable (so they can't end up in a git repo or shared folder).
     let temp_dir = paths::ensure_app_dirs()?;
-    info!("临时目录: {}", temp_dir.display());
+    info!("Temp directory: {}", temp_dir.display());
 
-    // 注意（issue #10）：这里**不再**预加载英文键盘布局。
-    // 旧实现在启动时无条件调用 LoadKeyboardLayoutW("00000409", KLF_ACTIVATE)，
-    // 会把英文布局登记进系统输入法列表，导致用户 Win+Space 里凭空多出
-    // `ENG / English (United States)`。现在英文布局只在确实需要时惰性解析，
-    // 且默认只复用系统已有布局，详见 config::ImeProtection。
+    // Note (issue #10): the English keyboard layout is **no longer** preloaded here.
+    // The old implementation unconditionally called LoadKeyboardLayoutW("00000409", KLF_ACTIVATE) at startup,
+    // registering the English layout in the system input-method list and adding a spurious
+    // `ENG / English (United States)` entry to Win+Space. The English layout is now resolved lazily and only when needed,
+    // and by default only an existing system layout is reused; see config::ImeProtection.
 
-    // 创建剪贴板管理器
+    // Create the clipboard manager
     let clipboard_manager = ClipboardManager::new(temp_dir.clone());
 
-    // 运行时状态
+    // Runtime state
     let state = Arc::new(Mutex::new(AppState {
         runtime_mode: app_config.runtime_mode.clone(),
         path_style: app_config.path_style,
@@ -68,10 +68,10 @@ async fn main() -> Result<()> {
         allow_non_image_files: app_config.allow_non_image_files,
     }));
 
-    // 启动托盘（含热键管理器）
+    // Start the tray (including the hotkey manager)
     let std_tray_rx = tray::TrayController::start(app_config, temp_dir.clone())?;
 
-    // 将 std mpsc 桥接到 tokio mpsc，以便在 select! 中使用
+    // Bridge the std mpsc channel to a tokio mpsc channel for use in select!
     let (tray_tx_bridge, mut tray_rx) = mpsc::channel::<TrayCommand>(32);
     tokio::task::spawn_blocking(move || {
         loop {
@@ -86,27 +86,27 @@ async fn main() -> Result<()> {
         }
     });
 
-    // 启动热键桥接
+    // Start the hotkey bridge
     let mut hotkey_rx = hotkey::start_hotkey_bridge();
 
-    // 定时清理任务
+    // Periodic cleanup task
     let temp_dir_for_cleanup = temp_dir.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(900));
         loop {
             interval.tick().await;
             if let Err(e) = cleanup::cleanup_old_files(&temp_dir_for_cleanup) {
-                warn!("清理临时文件失败: {}", e);
+                warn!("Failed to clean up temp files: {}", e);
             }
         }
     });
 
-    info!("WSL Clipboard Helper 已启动");
+    info!("WSL Clipboard Helper started");
 
-    // 主事件循环
+    // Main event loop
     loop {
         tokio::select! {
-            // 热键触发
+            // Hotkey fired
             Some(_hotkey_id) = hotkey_rx.recv() => {
                 let (mode, path_style, ime_protection, allow_non_image_files) = {
                     let s = state.lock().await;
@@ -115,68 +115,68 @@ async fn main() -> Result<()> {
                 match handle_paste(&clipboard_manager, &mode, path_style, ime_protection, allow_non_image_files).await {
                     Ok(_) => {}
                     Err(e) => {
-                        error!("粘贴处理失败: {}", e);
+                        error!("Paste failed: {}", e);
                     }
                 }
             }
-            // 托盘命令
+            // Tray command
             Some(cmd) = tray_rx.recv() => {
                 match cmd {
                     TrayCommand::SwitchHotkey(ht) => {
-                        info!("主循环: 热键已切换为 {}", ht.display_name());
+                        info!("Main loop: hotkey switched to {}", ht.display_name());
                     }
                     TrayCommand::SwitchMode(mode) => {
-                        info!("主循环: 模式已切换为 {:?}", mode);
+                        info!("Main loop: mode switched to {:?}", mode);
                         let mut s = state.lock().await;
                         s.runtime_mode = mode;
                     }
                     TrayCommand::SwitchPathStyle(style) => {
-                        info!("主循环: 路径格式已切换为 {}", style.display_name());
+                        info!("Main loop: path style switched to {}", style.display_name());
                         let mut s = state.lock().await;
                         s.path_style = style;
                     }
                     TrayCommand::SwitchImeProtection(policy) => {
-                        info!("主循环: 输入法保护已切换为 {}", policy.display_name());
+                        info!("Main loop: IME guard switched to {}", policy.display_name());
                         let mut s = state.lock().await;
                         s.ime_protection = policy;
                     }
                     TrayCommand::SwitchAllowNonImageFiles(allow) => {
-                        info!("主循环: 非图片文件路径转换={}", allow);
+                        info!("Main loop: non-image file path conversion={}", allow);
                         let mut s = state.lock().await;
                         s.allow_non_image_files = allow;
                     }
                     TrayCommand::OpenFolder => {
                         if let Err(e) = tray::open_temp_folder() {
-                            error!("打开文件夹失败: {}", e);
+                            error!("Failed to open folder: {}", e);
                         }
                     }
                     TrayCommand::Exit => {
-                        info!("收到退出命令");
+                        info!("Received exit command");
                         break;
                     }
                 }
             }
             else => {
-                // 所有通道关闭
+                // All channels closed
                 break;
             }
         }
     }
 
-    // 退出前清理 temp 目录下的所有 PNG 文件
+    // Delete all PNG files in the temp directory before exiting
     if let Err(e) = cleanup::cleanup_temp_png(&temp_dir) {
-        warn!("退出清理临时文件失败: {}", e);
+        warn!("Failed to clean up temp files on exit: {}", e);
     }
 
-    // 若本进程曾惰性加载过英文键盘布局（ime_protection = "layout-force"），
-    // 退出时卸载掉，不在用户的输入法切换列表里留下残留（issue #10）
+    // If this process lazily loaded an English keyboard layout (ime_protection = "layout-force"),
+    // unload it on exit so nothing is left in the user's input-method list (issue #10)
     paste::unload_self_loaded_layout();
 
-    info!("WSL Clipboard Helper 已退出");
+    info!("WSL Clipboard Helper exited");
     std::process::exit(0);
 }
 
-/// 处理粘贴操作
+/// Handle a paste request
 async fn handle_paste(
     clipboard_manager: &ClipboardManager,
     mode: &RuntimeMode,
@@ -184,11 +184,11 @@ async fn handle_paste(
     ime_protection: ImeProtection,
     allow_non_image_files: bool,
 ) -> Result<()> {
-    // 0. 立即注入菜单屏蔽键：赶在物理 Alt 抬起之前，
-    //    避免目标窗口把"Alt 按下→抬起"当成单击 Alt 激活菜单栏
+    // 0. Inject the menu-mask key immediately, before the physical Alt is released,
+    //    so the target window doesn't treat "Alt down -> up" as a lone Alt tap that activates the menu bar
     paste::mask_alt_tap();
 
-    // 1. 检查剪贴板是否有图片
+    // 1. Check whether the clipboard holds an image
     if !clipboard_manager.has_image() {
         if clipboard_manager.has_file_list() {
             if let Some(wsl_paths) =
@@ -196,7 +196,7 @@ async fn handle_paste(
             {
                 let paste_text = path_style.format_paths(&wsl_paths);
                 if paste_text.is_empty() {
-                    info!("文件路径已全部过滤，跳过粘贴");
+                    info!("All file paths were filtered out, skipping paste");
                     return Ok(());
                 }
 
@@ -205,46 +205,46 @@ async fn handle_paste(
                     RuntimeMode::Fast => None,
                 };
 
-                info!("粘贴文件路径: {}", paste_text);
+                info!("Pasting file paths: {}", paste_text);
                 paste::paste_text(&paste_text)?;
                 return Ok(());
             }
 
-            // 剪贴板是文件列表但没有允许粘贴的项（例如复制了 .env）。
-            // 不要回退 Ctrl+V，否则会把原始文件拖放打进当前窗口。
-            info!("剪贴板文件列表已拒绝（非图片或路径不安全），跳过粘贴");
+            // The clipboard holds a file list but nothing is allowed to be pasted (e.g. a copied .env).
+            // Do not fall back to Ctrl+V, or the raw file drop would be pasted into the current window.
+            info!("Clipboard file list rejected (non-image or unsafe path), skipping paste");
             return Ok(());
         }
 
-        info!("剪贴板无图片，执行普通粘贴");
+        info!("No image on the clipboard, doing a normal paste");
         paste::send_ctrl_v()?;
         return Ok(());
     }
 
-    info!("检测到剪贴板图片");
+    info!("Clipboard image detected");
 
-    // 2. 读取图片（含缓存）
+    // 2. Read the image (cached)
     let (win_path, wsl_path, png_data) = clipboard_manager
         .read_image_for_paste()
-        .ok_or_else(|| anyhow::anyhow!("读取剪贴板图片失败"))?;
+        .ok_or_else(|| anyhow::anyhow!("Failed to read the clipboard image"))?;
 
-    // 3. 先落盘再粘贴：CLI 收到路径的瞬间会检查文件是否存在，
-    //    决定渲染成 [Image #n] 还是留下原始路径文本（issue #4）
-    info!("保存图片: {} bytes → {}", png_data.len(), win_path.display());
+    // 3. Save first, then paste: the moment the CLI receives the path it checks that the file exists,
+    //    to decide between rendering [Image #n] and leaving the raw path text (issue #4)
+    info!("Saving image: {} bytes -> {}", png_data.len(), win_path.display());
     image_saver::ensure_saved(&win_path, &png_data).await?;
 
-    // 4. 输入法保护（仅安全模式，且由 ime_protection 策略决定具体手段）
+    // 4. IME guard (safe mode only; the exact measure is set by the ime_protection policy)
     let _ime_guard = match mode {
         RuntimeMode::Safe => Some(paste::ImeGuard::new(ime_protection)),
         RuntimeMode::Fast => None,
     };
 
-    // 5. 粘贴 WSL 路径
+    // 5. Paste the WSL path
     let paste_text = path_style.format_paths(std::slice::from_ref(&wsl_path));
-    info!("粘贴路径: {}", paste_text);
+    info!("Pasting path: {}", paste_text);
     paste::paste_text(&paste_text)?;
 
-    // 6. ImeGuard 在此处 drop，触发 120ms 后恢复输入法
+    // 6. ImeGuard is dropped here, restoring the IME after 120 ms
 
     Ok(())
 }

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use tracing::{info, warn};
 
-/// 退出时清理 temp 目录下的所有 PNG 文件。
+/// Delete all PNG files in the temp directory on exit.
 pub fn cleanup_temp_png(temp_dir: &Path) -> Result<()> {
     if !temp_dir.exists() {
         return Ok(());
@@ -19,16 +19,16 @@ pub fn cleanup_temp_png(temp_dir: &Path) -> Result<()> {
         }
 
         if let Err(e) = fs::remove_file(&path) {
-            warn!("删除临时文件失败 {}: {}", path.display(), e);
+            warn!("Failed to delete temp file {}: {}", path.display(), e);
         } else {
-            info!("退出清理: {}", path.display());
+            info!("Exit cleanup: {}", path.display());
         }
     }
 
     Ok(())
 }
 
-/// 清理超过 30 分钟的临时 PNG 文件。
+/// Delete temporary PNG files older than 30 minutes.
 pub fn cleanup_old_files(temp_dir: &Path) -> Result<()> {
     let now = Local::now();
 
@@ -51,9 +51,9 @@ pub fn cleanup_old_files(temp_dir: &Path) -> Result<()> {
 
                 if minutes_old >= 30 {
                     if let Err(e) = fs::remove_file(&path) {
-                        warn!("删除过期文件失败 {}: {}", path.display(), e);
+                        warn!("Failed to delete expired file {}: {}", path.display(), e);
                     } else {
-                        info!("删除过期文件: {}", path.display());
+                        info!("Deleted expired file: {}", path.display());
                     }
                 }
             }

@@ -19,39 +19,39 @@ use tracing::{info, warn};
 
 use crate::config::ImeProtection;
 
-/// HKL 类型别名（Win32 HKL 就是一个 isize）
+/// HKL type alias (a Win32 HKL is just an isize)
 pub type HKL = isize;
 
 /// WM_INPUTLANGCHANGEREQUEST
 const WM_INPUTLANGCHANGEREQUEST: u32 = 0x0050;
 
-/// WM_IME_CONTROL 及其子命令，用于在**不改动键盘布局**的前提下
-/// 关闭 / 恢复前台窗口的 IME 输入状态
+/// WM_IME_CONTROL and its sub-commands, used to turn the foreground window's IME input state
+/// off and back on **without changing the keyboard layout**
 const WM_IME_CONTROL: u32 = 0x0283;
 const IMC_GETOPENSTATUS: usize = 0x0005;
 const IMC_SETOPENSTATUS: usize = 0x0006;
 
-/// LoadKeyboardLayoutW 的标志位。
+/// Flags for LoadKeyboardLayoutW.
 ///
-/// 这里**故意不使用 KLF_ACTIVATE (0x1)**：它会把英文布局激活到当前线程，
-/// 而 LoadKeyboardLayoutW 本身就已经把布局登记进系统输入法列表了，
-/// 两者叠加就是 issue #10 里"启动后 Win+Space 多出 ENG"的直接原因。
-/// KLF_NOTELLSHELL (0x80) 则可以阻止 Shell 收到 HSHELL_LANGUAGE 通知，
-/// 避免任务栏输入法指示器被重新唤出来。
+/// **KLF_ACTIVATE (0x1) is deliberately not used here**: it activates the English layout on the current thread,
+/// and LoadKeyboardLayoutW itself already registers the layout in the system input-method list,
+/// and the two combined were the direct cause of issue #10, "Win+Space shows an extra ENG after startup".
+/// KLF_NOTELLSHELL (0x80) stops the shell receiving the HSHELL_LANGUAGE notification,
+/// so the taskbar IME indicator isn't brought back.
 const KLF_NOTELLSHELL: u32 = 0x0080;
 
-/// SendMessageTimeout 标志：目标线程挂死时立刻返回，不要把热键线程拖住
+/// SendMessageTimeout flag: return immediately if the target thread is hung so the hotkey thread isn't held up
 const SMTO_ABORTIFHUNG: u32 = 0x0002;
-/// 与前台窗口 IME 通信的超时（毫秒）。粘贴路径对延迟敏感，宁可放弃保护也不能卡住。
+/// Timeout (ms) for talking to the foreground window's IME. Pasting is latency-sensitive: better to give up protection than to stall.
 const IME_CONTROL_TIMEOUT_MS: u32 = 80;
 
-/// 英语主语言 ID（LANG_ENGLISH）
+/// English primary language ID (LANG_ENGLISH)
 const LANG_ENGLISH: u16 = 0x09;
-/// en-US 完整语言 ID
+/// Full en-US language ID
 const LANGID_EN_US: u16 = 0x0409;
 
-/// 本进程通过 LoadKeyboardLayoutW 主动加载的英文布局。
-/// 0 表示从未主动加载过。退出时据此卸载，避免在用户的系统输入法列表里留下 ENG。
+/// The English layout this process loaded itself via LoadKeyboardLayoutW.
+/// 0 means never loaded. It is unloaded on exit so no ENG entry is left in the user's input-method list.
 static SELF_LOADED_ENGLISH_HKL: AtomicIsize = AtomicIsize::new(0);
 
 #[link(name = "user32")]
@@ -76,18 +76,18 @@ extern "system" {
     fn ImmGetDefaultIMEWnd(hwnd: isize) -> isize;
 }
 
-/// 取 HKL 低 16 位的输入语言 ID（高 16 位是设备句柄）
+/// Take the input language ID from the low 16 bits of an HKL (the high 16 bits are a device handle)
 fn langid_of(hkl: HKL) -> u16 {
     (hkl as usize & 0xFFFF) as u16
 }
 
-/// 取主语言 ID（LANGID 的低 10 位）
+/// Take the primary language ID (low 10 bits of a LANGID)
 fn primary_lang_of(hkl: HKL) -> u16 {
     langid_of(hkl) & 0x3FF
 }
 
-/// 在系统**已加载**的键盘布局里查找英文布局。
-/// 纯查询，不会向系统新增任何布局，因此没有任何副作用。
+/// Look for an English layout among the keyboard layouts the system has **already loaded**.
+/// Query only: it never adds a layout to the system, so there are no side effects.
 fn find_loaded_english_layout() -> Option<HKL> {
     unsafe {
         let count = GetKeyboardLayoutList(0, std::ptr::null_mut());
@@ -102,7 +102,7 @@ fn find_loaded_english_layout() -> Option<HKL> {
         }
         list.truncate(filled as usize);
 
-        // 优先精确匹配 en-US，其次退回任意英文变体（en-GB 等同样是纯字母布局）
+        // Prefer an exact en-US match, then fall back to any English variant (en-GB and the like are also plain Latin layouts)
         list.iter()
             .copied()
             .find(|hkl| langid_of(*hkl) == LANGID_EN_US)
@@ -114,23 +114,23 @@ fn find_loaded_english_layout() -> Option<HKL> {
     }
 }
 
-/// 惰性获取英文布局 HKL。
+/// Lazily obtain an English layout HKL.
 ///
-/// 与旧实现的关键区别：**不在启动时调用**，且默认只复用系统已有的布局。
-/// 只有 `allow_load = true`（`ime_protection = "layout-force"`）时才真正加载，
-/// 且不带 KLF_ACTIVATE，退出时会由 [`unload_self_loaded_layout`] 卸载。
+/// Key difference from the old implementation: **it is not called at startup**, and by default it only reuses layouts the system already has.
+/// It only actually loads a layout when `allow_load = true` (`ime_protection = "layout-force"`),
+/// without KLF_ACTIVATE, and [`unload_self_loaded_layout`] unloads it on exit.
 fn resolve_english_layout(allow_load: bool) -> Option<HKL> {
-    // 1) 复用系统里已经装好的英文布局（绝大多数英文/多语言用户走这条路）
+    // 1) Reuse an English layout already installed (the path most English/multilingual users take)
     if let Some(hkl) = find_loaded_english_layout() {
         return Some(hkl);
     }
 
-    // 2) 用户没装英文布局：默认放弃切换，绝不擅自往系统里塞一个 ENG
+    // 2) The user has no English layout: skip switching by default and never add an ENG on our own
     if !allow_load {
         return None;
     }
 
-    // 3) 显式允许时才加载，并且只加载一次
+    // 3) Only load when explicitly allowed, and only once
     let cached = SELF_LOADED_ENGLISH_HKL.load(Ordering::Relaxed);
     if cached != 0 {
         return Some(cached);
@@ -140,17 +140,17 @@ fn resolve_english_layout(allow_load: bool) -> Option<HKL> {
         let klid: Vec<u16> = "00000409\0".encode_utf16().collect();
         let hkl = LoadKeyboardLayoutW(klid.as_ptr(), KLF_NOTELLSHELL);
         if hkl == 0 {
-            warn!("加载英文键盘布局失败，跳过输入法保护");
+            warn!("Failed to load the English keyboard layout, skipping IME guard");
             return None;
         }
-        info!("已惰性加载英文键盘布局 {:#x}（退出时会卸载）", hkl);
+        info!("Lazily loaded English keyboard layout {:#x} (will be unloaded on exit)", hkl);
         SELF_LOADED_ENGLISH_HKL.store(hkl, Ordering::Relaxed);
         Some(hkl)
     }
 }
 
-/// 退出时卸载本进程主动加载过的英文布局，
-/// 保证不会在用户的输入法切换列表里留下残留（issue #10）。
+/// On exit, unload the English layout this process loaded itself,
+/// so nothing is left in the user's input-method switch list (issue #10).
 pub fn unload_self_loaded_layout() {
     let hkl = SELF_LOADED_ENGLISH_HKL.swap(0, Ordering::Relaxed);
     if hkl == 0 {
@@ -158,15 +158,15 @@ pub fn unload_self_loaded_layout() {
     }
     unsafe {
         if UnloadKeyboardLayout(hkl) == 0 {
-            warn!("卸载英文键盘布局 {:#x} 失败", hkl);
+            warn!("Failed to unload English keyboard layout {:#x}", hkl);
         } else {
-            info!("已卸载本进程加载的英文键盘布局 {:#x}", hkl);
+            info!("Unloaded the English keyboard layout this process loaded {:#x}", hkl);
         }
     }
 }
 
-/// 向前台窗口的默认 IME 窗口发送 WM_IME_CONTROL。
-/// 使用带超时的 SendMessageTimeoutW，避免目标进程无响应时卡住粘贴。
+/// Send WM_IME_CONTROL to the foreground window's default IME window.
+/// Uses SendMessageTimeoutW with a timeout so an unresponsive target process can't stall the paste.
 unsafe fn send_ime_control(ime_wnd: isize, sub_command: usize, lparam: isize) -> Option<usize> {
     let mut result: usize = 0;
     let ok = SendMessageTimeoutW(
@@ -185,48 +185,48 @@ unsafe fn send_ime_control(ime_wnd: isize, sub_command: usize, lparam: isize) ->
     }
 }
 
-/// 粘贴文本到剪贴板并执行粘贴操作
+/// Put text on the clipboard and perform the paste
 pub fn paste_text(text: &str) -> Result<()> {
     unsafe {
-        // 尝试打开剪贴板，带重试机制
+        // Try to open the clipboard, with a retry
         if OpenClipboard(None).is_err() {
             std::thread::sleep(std::time::Duration::from_millis(10));
             if let Err(e) = OpenClipboard(None) {
-                bail!("无法打开剪贴板: {:?}", e);
+                bail!("Cannot open the clipboard: {:?}", e);
             }
         }
 
-        // 清空剪贴板（关键修复：必须先清空再设置）
+        // Empty the clipboard (key fix: it must be emptied before setting)
         if let Err(e) = EmptyClipboard() {
             CloseClipboard().ok();
-            bail!("清空剪贴板失败: {:?}", e);
+            bail!("Failed to empty the clipboard: {:?}", e);
         }
 
-        // 准备 UTF-16 编码的数据
+        // Prepare the UTF-16 data
         let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let byte_len = utf16.len() * std::mem::size_of::<u16>();
 
-        // 分配内存
+        // Allocate memory
         let h_mem = match GlobalAlloc(GMEM_MOVEABLE, byte_len) {
             Ok(mem) => mem,
             Err(e) => {
                 CloseClipboard().ok();
-                bail!("分配剪贴板内存失败: {:?}", e);
+                bail!("Failed to allocate clipboard memory: {:?}", e);
             }
         };
 
         let ptr = GlobalLock(h_mem);
         if ptr.is_null() {
             CloseClipboard().ok();
-            bail!("锁定内存失败");
+            bail!("Failed to lock memory");
         }
 
-        // 复制数据
+        // Copy the data
         std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr as *mut u8, byte_len);
 
         let _ = GlobalUnlock(h_mem);
 
-        // 设置剪贴板数据
+        // Set the clipboard data
         if SetClipboardData(
             CF_UNICODETEXT.0 as u32,
             Some(windows::Win32::Foundation::HANDLE(h_mem.0)),
@@ -234,31 +234,31 @@ pub fn paste_text(text: &str) -> Result<()> {
         .is_err()
         {
             CloseClipboard().ok();
-            bail!("设置剪贴板数据失败");
+            bail!("Failed to set clipboard data");
         }
 
         CloseClipboard().ok();
     }
 
-    // 发送粘贴快捷键
+    // Send the paste shortcut
     send_ctrl_v()?;
     Ok(())
 }
 
-/// 菜单屏蔽键：与 AHK 的 A_MenuMaskKey（vkFF）一致。
-/// 热键触发时物理 Alt 往往仍按着，目标窗口只看到 Alt 按下（V 被热键吞掉），
-/// 若紧接着注入 Alt 抬起，部分程序会当成“单击 Alt”激活菜单栏、抢走输入焦点，
-/// 导致后续 Ctrl+V 粘不出内容。先注入一个无副作用的按键可打断该判定。
+/// Menu mask key: matches AHK's A_MenuMaskKey (vkFF).
+/// When the hotkey fires the physical Alt is usually still held, so the target window only sees Alt down (the V is swallowed by the hotkey).
+/// If an Alt up is injected right after, some programs treat it as a lone "Alt tap", activate the menu bar and steal input focus,
+/// so the following Ctrl+V pastes nothing. Injecting a harmless key first breaks that detection.
 const VK_MENU_MASK: VIRTUAL_KEY = VIRTUAL_KEY(0xFF);
 
-/// 检查某个虚拟键当前是否被物理按住
+/// Check whether a virtual key is currently physically held down
 fn is_key_down(vk: VIRTUAL_KEY) -> bool {
     unsafe { (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0 }
 }
 
-/// 等待用户松开会污染 Ctrl+V 的物理修饰键（Alt/Shift），最多等待 timeout_ms。
-/// 物理按住的 Alt 会随键盘自动重复重新置为按下状态，仅靠注入抬起事件不总是够，
-/// 这是“偶发粘贴无内容”的常见来源之一。
+/// Wait for the user to release physical modifier keys (Alt/Shift) that would corrupt Ctrl+V, for at most timeout_ms.
+/// A physically held Alt is set back to down by keyboard auto-repeat, so injecting a key-up is not always enough;
+/// this is a common source of occasional empty pastes.
 fn wait_modifiers_released(timeout_ms: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     while is_key_down(VK_MENU)
@@ -267,17 +267,17 @@ fn wait_modifiers_released(timeout_ms: u64) {
         || is_key_down(VK_SHIFT)
     {
         if std::time::Instant::now() >= deadline {
-            warn!("等待修饰键释放超时，继续注入粘贴按键");
+            warn!("Timed out waiting for modifier release, injecting the paste keys anyway");
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
-/// 热键触发后应立即调用：抢在用户松开 Alt 之前插入屏蔽键。
-/// RegisterHotKey 会吞掉 V 键事件，目标窗口只看到 Alt 按下/抬起；
-/// 若屏蔽键能落在物理 Alt 抬起之前，窗口就不会把它当成"单击 Alt"而激活菜单栏。
-/// 必须放在读剪贴板/写文件等耗时操作之前，越早越好。
+/// Call immediately after the hotkey fires: insert the mask key before the user releases Alt.
+/// RegisterHotKey swallows the V key event, so the target window only sees Alt down/up;
+/// if the mask key lands before the physical Alt release, the window won't treat it as a lone Alt tap and activate the menu bar.
+/// It must run before slow work such as reading the clipboard or writing files, the earlier the better.
 pub fn mask_alt_tap() {
     let inputs = [
         make_key_input(VK_MENU_MASK, false),
@@ -288,8 +288,8 @@ pub fn mask_alt_tap() {
     }
 }
 
-/// 若前台线程已进入菜单模式（快速松开 Alt 时屏蔽键会输掉竞速，菜单栏已被激活），
-/// 先发送 Esc 退出菜单，否则注入的 Ctrl+V 会被菜单吃掉、粘贴无效
+/// If the foreground thread has already entered menu mode (when Alt is released quickly the mask key loses the race and the menu bar is activated),
+/// send Esc to leave the menu first, otherwise the injected Ctrl+V is eaten by the menu and the paste does nothing
 fn dismiss_menu_mode_if_active() {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -310,7 +310,7 @@ fn dismiss_menu_mode_if_active() {
         }
 
         if (info.flags & GUI_INMENUMODE).0 != 0 {
-            info!("前台窗口处于菜单模式，先发送 Esc 退出再粘贴");
+            info!("Foreground window is in menu mode, sending Esc before pasting");
             let esc = [
                 make_key_input(VK_ESCAPE, false),
                 make_key_input(VK_ESCAPE, true),
@@ -321,10 +321,10 @@ fn dismiss_menu_mode_if_active() {
     }
 }
 
-/// 释放所有修饰键（Alt/Ctrl/Shift），对应 AHK 的 NormalizeModifierStateBeforeSend
+/// Release all modifier keys (Alt/Ctrl/Shift); corresponds to AHK's NormalizeModifierStateBeforeSend
 pub fn release_all_modifiers() {
     let inputs = [
-        // 先打菜单屏蔽键，再抬 Alt，避免“单击 Alt”激活窗口菜单
+        // Send the menu mask key first, then release Alt, so a lone Alt tap doesn't activate the window menu
         make_key_input(VK_MENU_MASK, false),
         make_key_input(VK_MENU_MASK, true),
         make_key_input(VK_MENU, true),     // Alt up
@@ -339,12 +339,12 @@ pub fn release_all_modifiers() {
     }
 }
 
-/// Windows Terminal 顶层窗口类名
+/// Windows Terminal top-level window class name
 const WINDOWS_TERMINAL_CLASS: &str = "CASCADIA_HOSTING_WINDOW_CLASS";
 
-/// 前台窗口是否是 Windows Terminal。
-/// 在 WSL 终端里 Ctrl+V 常被用户改绑或交给 TUI 应用处理，
-/// 而 Ctrl+Shift+V 是终端的固定"粘贴"快捷键，注入它才能稳定地把路径贴进输入框。
+/// Whether the foreground window is Windows Terminal.
+/// In a WSL terminal Ctrl+V is often rebound by the user or handled by a TUI app,
+/// whereas Ctrl+Shift+V is the terminal's fixed "paste" shortcut, so injecting it reliably pastes the path into the input box.
 fn foreground_is_windows_terminal() -> bool {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -360,15 +360,15 @@ fn foreground_is_windows_terminal() -> bool {
     }
 }
 
-/// 发送粘贴快捷键（使用 SendInput 替代 keybd_event）。
-/// Windows Terminal 用 Ctrl+Shift+V，其他窗口用 Ctrl+V。
+/// Send the paste shortcut (uses SendInput instead of keybd_event).
+/// Windows Terminal gets Ctrl+Shift+V; other windows get Ctrl+V.
 pub fn send_ctrl_v() -> Result<()> {
-    // 先给用户留出松开热键的时间（Alt+V/Alt+Enter 的 Alt 尚未抬起时，
-    // 注入的 Ctrl+V 会被识别成 Ctrl+Alt+V 而失效）
+    // Give the user time to release the hotkey first (if the Alt of Alt+V/Alt+Enter is still down,
+    // the injected Ctrl+V is read as Ctrl+Alt+V and does nothing)
     wait_modifiers_released(250);
     let use_shift = foreground_is_windows_terminal();
     release_all_modifiers();
-    // Alt 已被松开且菜单栏被激活时，Ctrl+V 会发进菜单而不是输入框
+    // If Alt was released and the menu bar got activated, Ctrl+V goes to the menu instead of the input box
     dismiss_menu_mode_if_active();
 
     let mut inputs = vec![make_key_input(VK_CONTROL, false)];
@@ -385,14 +385,14 @@ pub fn send_ctrl_v() -> Result<()> {
     unsafe {
         let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
         if sent != inputs.len() as u32 {
-            bail!("SendInput 发送失败，期望 {} 实际 {}", inputs.len(), sent);
+            bail!("SendInput failed, expected {} sent {}", inputs.len(), sent);
         }
     }
 
     Ok(())
 }
 
-/// 构造键盘 INPUT 结构
+/// Build a keyboard INPUT structure
 fn make_key_input(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
     let mut flags = windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS(0);
     if key_up {
@@ -413,34 +413,34 @@ fn make_key_input(vk: VIRTUAL_KEY, key_up: bool) -> INPUT {
     }
 }
 
-/// 恢复动作的延迟（毫秒）：必须晚于注入的 Ctrl+V 被目标窗口真正处理的时刻，
-/// 否则输入法会在粘贴完成前就被切回去。
+/// Delay (ms) before restoring: it must be later than the moment the target window actually processes the injected Ctrl+V,
+/// otherwise the IME would be switched back before the paste completes.
 const RESTORE_DELAY_MS: u64 = 120;
 
-/// [`ImeGuard`] 在析构时需要撤销的动作。
-/// 只有真正改动过状态才会记录，"什么都没做"就绝不会去恢复。
+/// The action [`ImeGuard`] must undo when dropped.
+/// It is only recorded when state was actually changed; if nothing was done, nothing is ever restored.
 enum ImeRestore {
-    /// 未做任何改动，无需恢复
+    /// Nothing was changed, nothing to restore
     Nothing,
-    /// 需要把键盘布局切回原值
+    /// The keyboard layout must be switched back to its original value
     Layout { hwnd: isize, previous_hkl: HKL },
-    /// 需要把 IME 输入状态重新打开
+    /// The IME open status must be turned back on
     OpenStatus { ime_wnd: isize },
 }
 
-/// 输入法保护器
+/// IME guard
 ///
-/// 在粘贴前把前台窗口置为"直接输入英文"的状态，粘贴完成后异步恢复。
-/// 具体手段由 [`ImeProtection`] 策略决定，详见该枚举的说明与 issue #10。
+/// Puts the foreground window into a "direct English input" state before pasting and restores it asynchronously afterwards.
+/// The exact measure is decided by the [`ImeProtection`] policy; see that enum's docs and issue #10.
 ///
-/// 设计原则：输入法保护是**尽力而为**的辅助措施。任何一步失败都安静降级成
-/// "不保护"，绝不让输入法问题导致粘贴本身失败，也绝不擅自改动系统输入法列表。
+/// Design principle: the IME guard is a **best-effort** aid. Any failing step quietly degrades to
+/// "no protection"; an IME problem must never make the paste itself fail, and the system input-method list is never modified on our own.
 pub struct ImeGuard {
     restore: ImeRestore,
 }
 
 impl ImeGuard {
-    /// 按给定策略保护输入法状态
+    /// Protect the IME state according to the given policy
     pub fn new(policy: ImeProtection) -> Self {
         let restore = match policy {
             ImeProtection::Off => ImeRestore::Nothing,
@@ -453,10 +453,10 @@ impl ImeGuard {
         Self { restore }
     }
 
-    /// 关闭前台窗口的 IME 输入状态（即切到直接输入 / 英文模式）。
+    /// Close the foreground window's IME open status (i.e. switch to direct input / English mode).
     ///
-    /// 这是默认策略：只和目标窗口的 IME 窗口通信，**完全不触碰键盘布局**，
-    /// 因此不会像旧实现那样在系统输入法列表里新增 `ENG`（issue #10）。
+    /// This is the default policy: it only talks to the target window's IME window and **never touches keyboard layouts**,
+    /// so unlike the old implementation it never adds an `ENG` entry to the system input-method list (issue #10).
     fn close_ime_open_status() -> ImeRestore {
         unsafe {
             let hwnd = GetForegroundWindow();
@@ -466,34 +466,34 @@ impl ImeGuard {
 
             let ime_wnd = ImmGetDefaultIMEWnd(hwnd.0 as isize);
             if ime_wnd == 0 {
-                // 前台窗口没有关联 IME 窗口（纯英文环境常见），无需保护
+                // The foreground window has no associated IME window (common in English-only setups), so no protection is needed
                 return ImeRestore::Nothing;
             }
 
-            // 已经处于关闭（直接输入）状态时不做任何改动，也就不需要恢复
+            // If it is already closed (direct input) change nothing, so there is nothing to restore
             match send_ime_control(ime_wnd, IMC_GETOPENSTATUS, 0) {
                 Some(0) => return ImeRestore::Nothing,
                 None => {
-                    warn!("ImeGuard: 查询 IME 输入状态超时，跳过输入法保护");
+                    warn!("ImeGuard: timed out querying IME open status, skipping IME guard");
                     return ImeRestore::Nothing;
                 }
                 Some(_) => {}
             }
 
             if send_ime_control(ime_wnd, IMC_SETOPENSTATUS, 0).is_none() {
-                warn!("ImeGuard: 关闭 IME 输入状态超时，跳过输入法保护");
+                warn!("ImeGuard: timed out closing IME open status, skipping IME guard");
                 return ImeRestore::Nothing;
             }
 
-            info!("ImeGuard: 已关闭前台窗口 IME 输入状态");
+            info!("ImeGuard: closed the foreground window IME open status");
             ImeRestore::OpenStatus { ime_wnd }
         }
     }
 
-    /// 切换到英文键盘布局（兼容旧行为）。
+    /// Switch to an English keyboard layout (legacy-compatible behaviour).
     ///
-    /// `allow_load` 为 false 时只复用系统里已经装好的英文布局，
-    /// 找不到就直接放弃，绝不调用 LoadKeyboardLayoutW 往系统里新增布局。
+    /// When `allow_load` is false only an English layout the system already has is reused,
+    /// and if none is found it gives up without ever calling LoadKeyboardLayoutW to add a layout.
     fn switch_to_english_layout(allow_load: bool) -> ImeRestore {
         unsafe {
             let hwnd = GetForegroundWindow();
@@ -508,7 +508,7 @@ impl ImeGuard {
 
             let current_hkl = GetKeyboardLayout(thread_id);
 
-            // 当前已经是英文布局，无需切换
+            // Already an English layout, no switch needed
             if primary_lang_of(current_hkl) == LANG_ENGLISH {
                 return ImeRestore::Nothing;
             }
@@ -516,7 +516,7 @@ impl ImeGuard {
             let english_hkl = match resolve_english_layout(allow_load) {
                 Some(hkl) => hkl,
                 None => {
-                    info!("ImeGuard: 系统未加载英文键盘布局，跳过切换（不会擅自添加 ENG）");
+                    info!("ImeGuard: no English keyboard layout loaded, skipping the switch (will not add ENG on its own)");
                     return ImeRestore::Nothing;
                 }
             };
@@ -526,7 +526,7 @@ impl ImeGuard {
             }
 
             info!(
-                "ImeGuard: 切换输入法 {:#x} -> {:#x}",
+                "ImeGuard: switching input method {:#x} -> {:#x}",
                 current_hkl, english_hkl
             );
             let _ = PostMessageW(
@@ -546,8 +546,8 @@ impl ImeGuard {
 }
 
 impl Drop for ImeGuard {
-    /// 析构时在后台线程延迟恢复，既不阻塞热键线程，
-    /// 也保证恢复发生在注入的 Ctrl+V 被目标窗口处理之后
+    /// Restore after a delay on a background thread when dropped, which neither blocks the hotkey thread
+    /// nor lets the restore happen before the target window has processed the injected Ctrl+V
     fn drop(&mut self) {
         match std::mem::replace(&mut self.restore, ImeRestore::Nothing) {
             ImeRestore::Nothing => {}
@@ -562,9 +562,9 @@ impl Drop for ImeGuard {
                             WPARAM(0),
                             LPARAM(previous_hkl),
                         ) {
-                            warn!("恢复输入法失败: {:?}", e);
+                            warn!("Failed to restore the input method: {:?}", e);
                         } else {
-                            info!("ImeGuard: 已恢复输入法 {:#x}", previous_hkl);
+                            info!("ImeGuard: restored input method {:#x}", previous_hkl);
                         }
                     }
                 });
@@ -575,9 +575,9 @@ impl Drop for ImeGuard {
                     std::thread::sleep(std::time::Duration::from_millis(RESTORE_DELAY_MS));
                     unsafe {
                         if send_ime_control(ime_wnd, IMC_SETOPENSTATUS, 1).is_none() {
-                            warn!("恢复 IME 输入状态超时");
+                            warn!("Timed out restoring IME open status");
                         } else {
-                            info!("ImeGuard: 已恢复 IME 输入状态");
+                            info!("ImeGuard: restored IME open status");
                         }
                     }
                 });

@@ -1,87 +1,87 @@
-# WSL Image Clipboard Helper 版本重构说明（V3.0 / V4.0）
+# WSL Image Clipboard Helper Refactor Notes (V3.0 / V4.0)
 
-## 1. 文档定位
+## 1. Purpose of this document
 
-本文档澄清两个版本的真实边界，避免口径混淆：
+This document clarifies the real boundary between the two versions so the terminology doesn't get confused:
 
-- `V3.0`：HotKey 再改版（AHK 体系内演进，不是 Rust 版）
-- `V4.0`：Rust 重构与稳定性增强版
+- `V3.0`: a rework of the hotkey (evolved within the AHK stack, not the Rust version)
+- `V4.0`: the Rust rewrite with added stability
 
-## 2. V3.0（HotKey 再改版，AHK 方案）
+## 2. V3.0 (hotkey rework, AHK implementation)
 
-### 2.1 版本目标
+### 2.1 Goals
 
-V3.0 的核心目标是优化热键体验和可配置性，在不更换技术栈的前提下提升可用性。
+V3.0 aimed to improve the hotkey experience and configurability, improving usability without changing the technology stack.
 
-### 2.2 关键变化
+### 2.2 Key changes
 
-1. 热键策略从固定写死改为可切换方案
-2. 增强冲突场景下的使用稳定性（减少“按了没反应”）
-3. 托盘菜单交互进一步完善，便于快速切换
-4. 保持既有主流程：图片落盘 + 粘贴 `/mnt/...` 路径
+1. The hotkey strategy went from hard-coded to switchable
+2. Better stability when hotkeys conflict (fewer "pressed it and nothing happened" cases)
+3. The tray menu interaction was refined for quick switching
+4. The existing main flow was kept: save the image to disk + paste the `/mnt/...` path
 
-### 2.3 版本边界说明
+### 2.3 Version boundary
 
-V3.0 仍是 AHK 主实现，并未引入 Rust 主程序替换。
+V3.0 is still the AHK main implementation; the Rust main program had not replaced it yet.
 
-## 3. V4.0（Rust 重构版）
+## 3. V4.0 (Rust rewrite)
 
-### 3.1 重构目标
+### 3.1 Goals
 
-V4.0 才是主流程迁移到 Rust 的版本，目标如下：
+V4.0 is the version where the main flow moved to Rust. Its goals:
 
-1. 将热键、托盘、剪贴板、保存、清理整合到统一二进制中
-2. 降低 AHK + PowerShell 混合维护成本
-3. 在性能和稳定性上提供更强的工程保障
+1. Combine hotkey, tray, clipboard, saving and cleanup into a single binary
+2. Reduce the maintenance cost of the mixed AHK + PowerShell setup
+3. Provide stronger engineering guarantees for performance and stability
 
-### 3.2 Rust 模块拆分
+### 3.2 Rust module layout
 
-V4.0 按职责划分模块：
+V4.0 splits modules by responsibility:
 
-- `main.rs`：主事件循环与任务编排
-- `hotkey.rs`：全局热键注册与事件桥接
-- `tray.rs`：托盘菜单和命令分发
-- `clipboard.rs`：剪贴板读取与 DIB 转 PNG
-- `paste.rs`：文本写入剪贴板并触发粘贴
-- `image_saver.rs`：异步图片保存
-- `config.rs`：`wsl_clipboard.toml` 配置管理
+- `main.rs`: main event loop and task orchestration
+- `hotkey.rs`: global hotkey registration and event bridging
+- `tray.rs`: tray menu and command dispatch
+- `clipboard.rs`: clipboard reading and DIB-to-PNG conversion
+- `paste.rs`: writing text to the clipboard and triggering the paste
+- `image_saver.rs`: image saving
+- `config.rs`: `wsl_clipboard.toml` configuration management
 
-### 3.3 V4.0 稳定性增强点
+### 3.3 V4.0 stability improvements
 
-1. DIB 像素偏移按真实头信息计算，不再固定 40 字节
-2. 复制剪贴板内存前增加 `GlobalSize` 边界校验
-3. 热键切换加入回滚策略，避免失败后无可用热键
-4. 异常路径下确保剪贴板句柄释放
+1. The DIB pixel offset is computed from the real header information instead of a fixed 40 bytes
+2. A `GlobalSize` bounds check was added before copying clipboard memory
+3. Hotkey switching has a rollback strategy so a failure never leaves no usable hotkey
+4. The clipboard handle is guaranteed to be released on error paths
 
-## 4. 兼容性策略
+## 4. Compatibility strategy
 
-从 V3.0 升级到 V4.0 时，保持用户操作习惯不变：
+When upgrading from V3.0 to V4.0, the user's habits stay unchanged:
 
-1. 默认热键逻辑保持一致
-2. 非图片场景仍回退普通粘贴
-3. 托盘切换热键/模式的交互保持延续
-4. 粘贴路径继续使用 WSL 格式（`/mnt/...`）
+1. The default hotkey behaviour is the same
+2. Non-image content still falls back to a normal paste
+3. The tray interaction for switching hotkey/mode continues as before
+4. The pasted path is still in WSL format (`/mnt/...`)
 
-## 5. 构建与验证（V4.0 Rust）
+## 5. Build and verification (V4.0 Rust)
 
-### 5.1 构建命令
+### 5.1 Build command
 
 ```bash
 cd rust
 cargo build --release --target x86_64-pc-windows-msvc
 ```
 
-### 5.2 回归验证建议
+### 5.2 Suggested regression checks
 
-1. 普通截图粘贴（24/32bpp）
-2. `CF_DIBV5` 来源粘贴
-3. 热键切换到冲突组合再切回
-4. 非图片内容回退普通粘贴
-5. 退出后热键与剪贴板资源释放情况
+1. Ordinary screenshot paste (24/32bpp)
+2. Paste from a `CF_DIBV5` source
+3. Switch the hotkey to a conflicting combination and back
+4. Non-image content falls back to a normal paste
+5. Hotkey and clipboard resources are released after exit
 
-## 6. 结论
+## 6. Conclusion
 
-本项目的正确版本口径是：
+The correct way to describe the versions is:
 
-- `V3.0 = HotKey 再改版（AHK）`
-- `V4.0 = Rust 重构版`
+- `V3.0 = hotkey rework (AHK)`
+- `V4.0 = Rust rewrite`

@@ -17,19 +17,19 @@ extern "system" {
     fn GetClipboardSequenceNumber() -> u32;
 }
 
-/// 缓存的图片数据
+/// Cached image data
 struct ImageCache {
-    /// 剪贴板序列号
+    /// Clipboard sequence number
     seq: u32,
-    /// PNG 数据
+    /// PNG data
     png_data: Vec<u8>,
-    /// Windows 路径
+    /// Windows path
     win_path: PathBuf,
-    /// WSL 路径
+    /// WSL path
     wsl_path: String,
 }
 
-/// 剪贴板管理器
+/// Clipboard manager
 pub struct ClipboardManager {
     temp_dir: PathBuf,
     wsl_temp_dir: String,
@@ -38,10 +38,10 @@ pub struct ClipboardManager {
 
 impl ClipboardManager {
     pub fn new(temp_dir: PathBuf) -> Self {
-        // 预计算 WSL 路径（匹配 AHK 的 gWslTempDir 优化）
+        // Precompute the WSL path (mirrors the AHK gWslTempDir optimisation)
         let wsl_temp_dir = convert_path_to_wsl(&temp_dir.to_string_lossy());
 
-        info!("WSL 临时目录: {}", wsl_temp_dir);
+        info!("WSL temp directory: {}", wsl_temp_dir);
 
         Self {
             temp_dir,
@@ -50,7 +50,7 @@ impl ClipboardManager {
         }
     }
 
-    /// 检查剪贴板是否有图片（不需要打开剪贴板，更快）
+    /// Check whether the clipboard has an image (no need to open the clipboard, so it is faster)
     pub fn has_image(&self) -> bool {
         unsafe {
             IsClipboardFormatAvailable(CF_BITMAP.0 as u32) != 0
@@ -79,21 +79,21 @@ impl ClipboardManager {
         }
     }
 
-    /// 获取当前剪贴板序列号
+    /// Get the current clipboard sequence number
     fn get_sequence(&self) -> u32 {
         unsafe { GetClipboardSequenceNumber() }
     }
 
-    /// 读取图片并准备粘贴数据（含缓存）
-    /// 返回 (win_path, wsl_path, png_data)
+    /// Read the image and prepare paste data (cached)
+    /// Returns (win_path, wsl_path, png_data)
     pub fn read_image_for_paste(&self) -> Option<(PathBuf, String, Vec<u8>)> {
         let seq = self.get_sequence();
 
-        // 检查缓存
+        // Check the cache
         if let Ok(cache) = self.cache.lock() {
             if let Some(ref cached) = *cache {
                 if cached.seq == seq && seq != 0 {
-                    info!("使用缓存的图片数据 (seq={})", seq);
+                    info!("Using cached image data (seq={})", seq);
                     return Some((
                         cached.win_path.clone(),
                         cached.wsl_path.clone(),
@@ -103,10 +103,10 @@ impl ClipboardManager {
             }
         }
 
-        // 读取新数据
+        // Read fresh data
         let png_data = self.get_image_data()?;
 
-        // 生成文件名和路径
+        // Generate the file name and path
         let now = chrono::Local::now();
         let timestamp = now.format("%Y%m%d_%H%M%S_%3f").to_string();
         let filename = format!("clip_{}_{}.png", timestamp, std::process::id());
@@ -118,7 +118,7 @@ impl ClipboardManager {
             convert_path_to_wsl(&win_path.to_string_lossy())
         };
 
-        // 更新缓存
+        // Update the cache
         if let Ok(mut cache) = self.cache.lock() {
             *cache = Some(ImageCache {
                 seq,
@@ -153,14 +153,14 @@ impl ClipboardManager {
         }
     }
 
-    /// 获取图片数据并转换为 PNG
+    /// Get the image data and convert it to PNG
     fn get_image_data(&self) -> Option<Vec<u8>> {
         unsafe {
             if OpenClipboard(None).is_err() {
                 return None;
             }
 
-            // 尝试获取 DIB 数据
+            // Try to get DIB data
             let dib_data = if let Ok(h_data) = GetClipboardData(CF_DIB.0 as u32) {
                 Some(Self::read_dib_data(h_data))
             } else if let Ok(h_data) = GetClipboardData(CF_DIBV5.0 as u32) {
@@ -196,7 +196,7 @@ impl ClipboardManager {
             let mut buffer = vec![0u16; len as usize + 1];
             let copied = DragQueryFileW(hdrop, index, Some(&mut buffer));
             if copied == 0 {
-                warn!("读取剪贴板文件路径失败: index={}", index);
+                warn!("Failed to read clipboard file path: index={}", index);
                 continue;
             }
 
@@ -206,7 +206,7 @@ impl ClipboardManager {
         paths
     }
 
-    /// 从剪贴板读取 DIB 数据
+    /// Read DIB data from the clipboard
     unsafe fn read_dib_data(h_data: HANDLE) -> Vec<u8> {
         const MAX_DIB_SIZE: usize = 100 * 1024 * 1024;
 
@@ -226,7 +226,7 @@ impl ClipboardManager {
             let header = std::slice::from_raw_parts(ptr as *const u8, BITMAPINFOHEADER_SIZE);
             let info = read_bitmap_info(header);
 
-            // 从 packed struct 复制字段到本地变量（避免对齐问题）
+            // Copy fields out of the packed struct into locals (avoids alignment issues)
             let bi_width = info.bi_width.unsigned_abs() as usize;
             let bi_height = info.bi_height.unsigned_abs() as usize;
             let bi_bit_count = info.bi_bit_count;
@@ -244,7 +244,7 @@ impl ClipboardManager {
             )
             .unwrap_or(global_size);
 
-            // 读取大小同时受预估大小、实际分配大小和上限保护
+            // The read size is bounded by the estimated size, the actual allocation size and a hard cap
             let read_size = expected_size.min(global_size).min(MAX_DIB_SIZE);
             if read_size == 0 {
                 return Vec::new();
@@ -260,7 +260,7 @@ impl ClipboardManager {
         data
     }
 
-    /// 将 DIB 数据转换为 PNG
+    /// Convert DIB data to PNG
     fn convert_dib_to_png(dib_data: &[u8]) -> Option<Vec<u8>> {
         if dib_data.len() < std::mem::size_of::<BITMAPINFOHEADER>() {
             return None;
@@ -268,7 +268,7 @@ impl ClipboardManager {
 
         let info = read_bitmap_info(dib_data);
 
-        // 从 packed struct 复制字段到本地变量（避免对齐问题）
+        // Copy fields out of the packed struct into locals (avoids alignment issues)
         let bi_width = info.bi_width;
         let bi_height = info.bi_height;
         let bi_bit_count = info.bi_bit_count;
@@ -276,9 +276,9 @@ impl ClipboardManager {
         let bi_compression = info.bi_compression;
         let bi_clr_used = info.bi_clr_used;
 
-        // 只支持 24位和 32位 DIB
+        // Only 24-bit and 32-bit DIBs are supported
         if bi_bit_count != 24 && bi_bit_count != 32 {
-            tracing::warn!("不支持的位深度: {} 位", bi_bit_count);
+            tracing::warn!("Unsupported bit depth: {} bits", bi_bit_count);
             return None;
         }
 
@@ -309,7 +309,7 @@ impl ClipboardManager {
         let mut img_data = Vec::with_capacity(capacity);
         let mut alpha_any_nonzero = false;
 
-        // DIB bottom-up 时行从下到上存储
+        // For a bottom-up DIB, rows are stored from bottom to top
         for y in 0..height {
             let src_y = if bottom_up { height - 1 - y } else { y };
             let row_start = src_y * row_size;
@@ -337,16 +337,16 @@ impl ClipboardManager {
             }
         }
 
-        // 32 位 BI_RGB DIB 的第 4 字节在很多来源里是保留填充（恒为 0）而非真实 alpha；
-        // 若整张图 alpha 全 0，按不透明处理（与浏览器处理剪贴板 DIB 的启发式一致），
-        // 否则导出的 PNG 全透明，AI 工具读到的是一张"空白图"
+        // In many sources the 4th byte of a 32-bit BI_RGB DIB is reserved padding (always 0) rather than real alpha;
+        // if alpha is 0 across the whole image, treat it as opaque (the same heuristic browsers use for clipboard DIBs),
+        // otherwise the exported PNG would be fully transparent and AI tools would see a "blank image"
         if has_alpha && !alpha_any_nonzero {
             for a in img_data.iter_mut().skip(3).step_by(4) {
                 *a = 255;
             }
         }
 
-        // 使用 image crate 创建并编码 PNG
+        // Create and encode the PNG with the image crate
         #[cfg(feature = "image-support")]
         {
             use image::{DynamicImage, ImageBuffer};
@@ -369,18 +369,18 @@ impl ClipboardManager {
 
         #[cfg(not(feature = "image-support"))]
         {
-            tracing::warn!("image-support feature 未启用");
+            tracing::warn!("image-support feature is not enabled");
         }
 
         None
     }
 }
 
-/// 将 Windows 路径转换为 WSL 路径
+/// Convert a Windows path to a WSL path
 pub fn convert_path_to_wsl(path_str: &str) -> String {
     let path_str = path_str.trim_matches('"');
 
-    // 处理驱动器路径 "C:\path\to\file"
+    // Handle drive paths like "C:\path\to\file"
     if path_str.len() >= 3 && path_str.as_bytes()[1] == b':' && path_str.as_bytes()[2] == b'\\' {
         let drive = &path_str[0..1];
         let rest = path_str[3..].replace('\\', "/");
@@ -388,7 +388,7 @@ pub fn convert_path_to_wsl(path_str: &str) -> String {
         return format!("/mnt/{}/{}", drive.to_lowercase(), rest);
     }
 
-    // 处理没有反斜杠的路径（如 D:\temp 变为 D:/temp）
+    // Handle paths without backslashes (e.g. D:\temp becomes D:/temp)
     if path_str.len() >= 3 && path_str.as_bytes()[1] == b':' {
         let drive = &path_str[0..1];
         let rest = path_str[2..].replace('\\', "/");
@@ -399,7 +399,7 @@ pub fn convert_path_to_wsl(path_str: &str) -> String {
     String::new()
 }
 
-/// BITMAPINFOHEADER 结构（部分字段）
+/// BITMAPINFOHEADER structure (partial fields)
 #[repr(C, packed)]
 struct BITMAPINFOHEADER {
     bi_size: u32,
@@ -479,7 +479,7 @@ fn calculate_dib_pixel_offset(
         return None;
     }
 
-    // BITMAPINFOHEADER + BI_BITFIELDS 时，掩码位于 header 与像素之间。
+    // With BITMAPINFOHEADER + BI_BITFIELDS, the masks sit between the header and the pixels.
     let mask_size = if header_size == BITMAPINFOHEADER_SIZE
         && (bi_compression == BI_BITFIELDS || bi_compression == BI_ALPHABITFIELDS)
     {

@@ -1,47 +1,47 @@
-# 终端图片粘贴场景实测报告（v4.1）
+# Terminal Image Paste Scenario Test Report (v4.1)
 
-本报告记录对 v4.1（PR #7 合并后）粘贴链路的系统性实测：把工具会注入到终端的各类路径文本形态，逐一喂给 CLI Agent 的文件读取管线，验证能否被正确识别为图片，并复现 issue #2 / #4 / #5 涉及的失败模式。
+This report records systematic testing of the v4.1 paste pipeline (after PR #7 was merged). Every shape of path text the tool injects into a terminal was fed into a CLI agent's file-reading pipeline to check that it is recognised as an image, and to reproduce the failure modes behind issues #2 / #4 / #5.
 
-## 测试方法与局限
+## Method and limitations
 
-- **环境**：Claude Code 无头 Agent 会话（Linux 容器）。在容器内构造 `/mnt/c/Users/<用户名>/wsl_clipboard/temp/` 目录结构，1:1 模拟 WSL 挂载盘上的真实输出路径；测试图片按工具真实命名规则生成（`clip_YYYYMMDD_HHMMSS_mmm.png`）。
-- **验证层**：Claude Code 的文件读取管线——与交互式终端把路径渲染成 `[Image #n]` 附件时加载图片字节是同一层。每个变体把粘贴文本**原样**（含引号、`@`、尾随空格等装饰字符）作为路径提交，观察是否渲染为图片。
-- **局限**：交互式 TUI 输入框对粘贴文本的预处理（`@` 文件引用解析、引号剥离、路径检测）无法在 Agent 环境完全复现。本测试覆盖"路径字符串 → 文件系统解析 → 图片渲染"这一层；`@` 与引号风格在 Kimi/Gemini/Qwen 等 CLI 输入层的解析行为需在真机上另行确认。
+- **Environment**: a headless Claude Code agent session (Linux container). The directory structure `/mnt/c/Users/<username>/wsl_clipboard/temp/` was built inside the container to mirror, 1:1, the real output paths on a WSL-mounted drive; test images were generated with the tool's real naming scheme (`clip_YYYYMMDD_HHMMSS_mmm.png`).
+- **Layer under test**: Claude Code's file-reading pipeline, which is the same layer that loads image bytes when an interactive terminal renders a path as an `[Image #n]` attachment. Each variant submits the pasted text **verbatim** (including decorations such as quotes, `@` and trailing spaces) as a path and checks whether it renders as an image.
+- **Limitation**: the pre-processing an interactive TUI input box applies to pasted text (`@` file-reference parsing, quote stripping, path detection) cannot be fully reproduced in an agent environment. This test covers the "path string -> filesystem resolution -> image rendering" layer; how Kimi/Gemini/Qwen and similar CLIs parse the `@` and quoted styles at their input layer needs to be confirmed separately on real machines.
 
-## 测试矩阵与结果（18 项）
+## Test matrix and results (18 items)
 
-| # | 场景 | 提交的文本形态 | 结果 | 观察 |
-|---|------|----------------|------|------|
-| S1 | plain 风格、文件已落盘（v4.1 主链路） | `/mnt/c/.../clip_..._001.png` | ✅ | 渲染为 64×64 纯红图片 |
-| S2a | 文件不存在（旧版竞态 / 清理后重贴旧路径） | 同上，文件从未写入 | ❌ | 明确报错 `File does not exist` |
-| S2b | 0 字节文件（已创建、内容未刷盘） | 同上，0 字节 | ❌ | 明确报错 `Image file is empty` |
-| S2c | 截断 PNG（写到一半的快照） | 同上，仅前一半字节 | ⚠️ | **静默失败**：读取不报错，但媒体被 API 拒收（`media removed — rejected by API`），既无图片也无错误提示 |
-| S3a | quoted 风格（引号原样到达文件层） | `"/mnt/c/.../clip_..._001.png"` | ❌ | 引号被当作路径字符，`File does not exist` |
-| S3b | at 风格（`@` 原样到达文件层） | `@/mnt/c/.../clip_..._001.png` | ❌ | `@` 未被剥离，查找失败 |
-| S3c | at 风格 + 尾随空格 | `@/mnt/c/... ` | ❌ | 同 S3b |
-| S3d | plain + 尾随空格 | `/mnt/c/.../clip_..._001.png ` | ⚠️ | 能定位到文件，但**绕过图片类型识别**，返回原始 PNG 字节文本而非渲染图片 |
-| S4 | Windows 用户名含空格 | `/mnt/c/Users/John Doe/.../clip_..._005.png` | ✅ | 不加引号也正常渲染（纯绿） |
-| S5 | 中文用户名 | `/mnt/c/Users/张三/.../clip_..._006.png` | ✅ | 正常渲染（纯蓝） |
-| S6 | 4K 分辨率截图（3840×2160） | plain 路径 | ✅ | 自动降采样至 2000×1125 后渲染 |
-| S7 | 大文件（6.2 MB 噪声图 1920×1080） | plain 路径 | ✅ | 直接渲染，未触发大小限制 |
-| S8a | 多文件粘贴（CF_HDROP）第 1 行 | `/mnt/c/.../shot_a.png` | ✅ | 纯黄 |
-| S8b | 多文件粘贴第 2 行 | `/mnt/c/.../shot_b.png` | ✅ | 纯青 |
-| S8c | 多文件粘贴含非图片文件 | `/mnt/c/.../notes.txt` | ✅ | 按文本读取，不误判为图片 |
-| S9a | Windows 反斜杠路径泄漏 | `C:\Users\...\clip_..._001.png` | ❌ | WSL 侧无法解析（文件实际存在于 `/mnt/c/...`） |
-| S9b | Windows 正斜杠路径 | `C:/Users/.../clip_..._001.png` | ❌ | `C:` 盘符不会被翻译成 `/mnt/c` |
-| 附 | 非 Windows 宿主 `cargo check` / `clippy` | Linux 主机 | ✅* | 见下节 |
+| # | Scenario | Submitted text | Result | Observation |
+|---|----------|----------------|--------|-------------|
+| S1 | plain style, file already on disk (v4.1 main path) | `/mnt/c/.../clip_..._001.png` | ✅ | Rendered as a 64×64 solid red image |
+| S2a | File does not exist (old race / re-pasting an old path after cleanup) | same, file never written | ❌ | Clear error `File does not exist` |
+| S2b | 0-byte file (created, contents not yet flushed) | same, 0 bytes | ❌ | Clear error `Image file is empty` |
+| S2c | Truncated PNG (half-written snapshot) | same, first half of the bytes only | ⚠️ | **Silent failure**: the read raises no error, but the media is rejected by the API (`media removed — rejected by API`), so there is neither an image nor an error message |
+| S3a | quoted style (quotes arrive at the file layer verbatim) | `"/mnt/c/.../clip_..._001.png"` | ❌ | Quotes are treated as path characters, `File does not exist` |
+| S3b | at style (`@` arrives at the file layer verbatim) | `@/mnt/c/.../clip_..._001.png` | ❌ | `@` is not stripped, lookup fails |
+| S3c | at style + trailing space | `@/mnt/c/... ` | ❌ | Same as S3b |
+| S3d | plain + trailing space | `/mnt/c/.../clip_..._001.png ` | ⚠️ | The file is found, but **image type detection is bypassed** and the raw PNG bytes are returned as text instead of a rendered image |
+| S4 | Windows username containing a space | `/mnt/c/Users/John Doe/.../clip_..._005.png` | ✅ | Renders fine without quotes (solid green) |
+| S5 | Non-ASCII (Chinese) username | `/mnt/c/Users/<non-ASCII name>/.../clip_..._006.png` | ✅ | Renders normally (solid blue) |
+| S6 | 4K screenshot (3840×2160) | plain path | ✅ | Automatically downsampled to 2000×1125 before rendering |
+| S7 | Large file (6.2 MB noise image, 1920×1080) | plain path | ✅ | Rendered directly, no size limit hit |
+| S8a | Multi-file paste (CF_HDROP), line 1 | `/mnt/c/.../shot_a.png` | ✅ | Solid yellow |
+| S8b | Multi-file paste, line 2 | `/mnt/c/.../shot_b.png` | ✅ | Solid cyan |
+| S8c | Multi-file paste including a non-image file | `/mnt/c/.../notes.txt` | ✅ | Read as text, not mistaken for an image |
+| S9a | Windows backslash path leaks through | `C:\Users\...\clip_..._001.png` | ❌ | Cannot be resolved on the WSL side (the file actually lives at `/mnt/c/...`) |
+| S9b | Windows forward-slash path | `C:/Users/.../clip_..._001.png` | ❌ | The `C:` drive letter is not translated to `/mnt/c` |
+| Extra | `cargo check` / `clippy` on a non-Windows host | Linux host | ✅* | See below |
 
-## 结论
+## Conclusions
 
-1. **v4.1 主链路全部通过**。"先落盘 → plain 粘贴 WSL 路径"在正常场景（含空格路径、中文路径、4K 尺寸、6 MB 大文件、多文件列表）下均被正确识别为图片。文件读取层对路径中的空格**不需要**引号或转义（S4）；引号风格的价值在于喂给 shell 命令等场景，而非图片粘贴。
-2. **issue #4 的成因得到实证**：文件不存在（S2a）或未写完（S2b/S2c）时路径不会被渲染成 `[Image #n]`，与 FAQ Q1 的解释一致。v4.1 改为 `ensure_saved` 完整写入后才注入粘贴，正常流程不再进入这三种状态。
-3. **两个新发现的边缘降级模式**（均不影响 v4.1 正常链路，记录备查）：
-   - **截断 PNG 是最隐蔽的失败**（S2c）：文件头完好、读取不报错，但图片在下游被拒收，用户看不到任何错误。触发条件：工具在写盘中途崩溃遗留半文件，且用户此后重贴同一路径（剪贴板缓存命中会因 `ensure_saved` 的 `try_exists` 短路而**不会**重写修复该文件）。
-   - **尾随空格会破坏图片识别**（S3d）：路径能解析但按文本返回。plain 风格不产生尾随空格，安全；at 风格的尾随空格是给 CLI 输入层断词用的，只要目标 CLI 正确消费 `@` 语法就不会传到文件层，符合设计意图。
-4. **引号 / `@` / Windows 原生路径都不被文件层识别**（S3a–c、S9）：这些形态的正确性完全依赖目标 CLI 输入层的解析。托盘"路径格式"必须与目标 CLI 匹配，README FAQ Q3/Q4 的指引是必要的。
-5. **`cargo check` / `cargo clippy` 在 Linux 宿主验证通过，但有未写明的前提**：`rust/.cargo/config.toml` 强制 `target = "x86_64-pc-windows-msvc"`，干净的 Linux 主机需先执行 `rustup target add x86_64-pc-windows-msvc`，否则在编译第一个依赖时即报 `E0463: can't find crate for core`。装好 target 后 `cargo check` 19.5s 通过；`cargo clippy` 通过（8 个风格类 warning，无错误）。`cargo test` 需要运行 Windows 测试二进制，无法在 Linux 宿主执行。
+1. **The v4.1 main path passes everything.** "Save to disk first, then paste a plain WSL path" is recognised as an image in all normal scenarios (paths with spaces, non-ASCII paths, 4K images, 6 MB files, multi-file lists). The file-reading layer does **not** need quotes or escaping for spaces in the path (S4); the value of the quoted style is for cases such as feeding a shell command, not for image pasting.
+2. **The cause of issue #4 is confirmed.** When the file does not exist (S2a) or is not fully written (S2b/S2c), the path is not rendered as `[Image #n]`, which matches the explanation in FAQ Q1. v4.1 now injects the paste only after `ensure_saved` has written the file completely, so normal use no longer enters these three states.
+3. **Two newly found edge-case degradations** (neither affects the normal v4.1 path; recorded for reference):
+   - **A truncated PNG is the most insidious failure** (S2c): the header is intact and the read raises no error, but the image is rejected downstream and the user sees no error. Trigger: the tool crashes mid-write and leaves a half-written file, and the user later re-pastes the same path (a clipboard cache hit short-circuits on `ensure_saved`'s `try_exists`, so the file is **not** rewritten and repaired).
+   - **A trailing space breaks image detection** (S3d): the path resolves but is returned as text. The plain style produces no trailing space, so it is safe; the trailing space in the at style exists so the CLI input layer can end the token, and as long as the target CLI consumes the `@` syntax correctly it never reaches the file layer, which matches the design intent.
+4. **Quoted / `@` / native Windows paths are not recognised by the file layer** (S3a–c, S9): whether they work depends entirely on how the target CLI's input layer parses them. The tray "Path style" setting must match the target CLI, so the guidance in README FAQ Q3/Q4 is necessary.
+5. **`cargo check` / `cargo clippy` pass on a Linux host, with an unstated prerequisite**: `rust/.cargo/config.toml` forces `target = "x86_64-pc-windows-msvc"`, so a clean Linux host must first run `rustup target add x86_64-pc-windows-msvc`, otherwise compiling the first dependency fails with `E0463: can't find crate for core`. With the target installed, `cargo check` passes in 19.5s and `cargo clippy` passes (8 style warnings, no errors). `cargo test` needs to run Windows test binaries and cannot be executed on a Linux host.
 
-## 改进建议（本次仅记录，未改代码）
+## Suggested improvements (recorded only; no code changed here)
 
-- `ensure_saved` 可改为"写临时文件 + rename"的原子落盘，并在 `try_exists` 命中时校验文件非空，消除 S2c 半文件残留后无法自愈的问题。
-- README 编译章节已补充非 Windows 宿主需 `rustup target add x86_64-pc-windows-msvc` 的说明（随本报告提交）。
+- `ensure_saved` could write to a temporary file and rename it for an atomic write, and verify the file is non-empty when `try_exists` hits, which removes the problem that a half-written file (S2c) can never heal itself.
+- The README build section now notes that non-Windows hosts need `rustup target add x86_64-pc-windows-msvc` (committed with this report).
